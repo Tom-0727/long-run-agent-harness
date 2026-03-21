@@ -33,11 +33,13 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 - `Memory/episodes/`
   有界限的执行记录。
 - `skills/`
-  可复用的 skill 机制（由 codex/claude runtime 自动加载）。
+  可复用的 skill 机制（由 claude runtime 自动加载）。
 - `mailbox/`
   人类-智能体共享邮箱。`MAILBOX.jsonl` 存放于此。
+- `run.py`
+  心跳启动器（Python，基于 `claude-agent-sdk`）。
 - `Runtime/`
-  调度器所需的状态信息，用于安全地延续同一个 Codex 或 Claude 线程。
+  调度器所需的状态信息，用于安全地延续同一个 Claude 会话。
 
 ### 1.1 规范分层原则
 
@@ -339,17 +341,28 @@ Memory/
 
 ### 6.1 目的
 
-心跳是框架层的编排机制，用于定期决定是否继续在同一 Codex或Claude 线程上工作。
+心跳是框架层的编排机制，用于定期决定是否继续在同一 Claude 会话上工作。
+
+通过 `run.py`（基于 `claude-agent-sdk`）实现。
 
 默认间隔：每 20 分钟。
 
-### 6.2 循环
+### 6.2 运行时
+
+使用 Claude Agent SDK（Python）作为唯一运行时：
+
+- `claude-agent-sdk` 提供：工具执行、会话管理、流式输出
+- 会话持久化：通过 `ResultMessage.session_id` 获取会话 ID，下次心跳通过 `resume=session_id` 恢复上下文
+- 自主执行：`permission_mode="bypassPermissions"` + `allowed_tools` 白名单
+- 安全边界：`max_turns` 和 `max_budget_usd` 限制每次心跳的资源消耗
+
+### 6.3 循环
 
 每次心跳唤醒时：
 
 1. 先从 `mailbox/MAILBOX.jsonl` 读取新消息
 2. 如果 `awaiting_human = true` 且没有新的人类消息，结束本次运行
-3. 如果没别的情况，则继续之前的对话运行
+3. 如果没别的情况，恢复上次会话（`resume=session_id`）继续工作
 
 ## 7. mailbox/（邮箱 / 询问人类）
 

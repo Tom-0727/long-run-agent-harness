@@ -1,6 +1,6 @@
 # task-forge
 
-Scaffold tool for creating autonomous Agent workspaces. One command creates a complete workspace with behavioral rules, memory structure, communication mailbox, and a heartbeat launcher script.
+Scaffold tool for creating autonomous Agent workspaces. One command creates a complete workspace with behavioral rules, memory structure, communication mailbox, and a heartbeat launcher.
 
 Based on the design spec in [DESIGNS.md](./DESIGNS.md).
 
@@ -15,7 +15,8 @@ Example:
 ```bash
 ./create-agent ~/agents/researcher ResearchBot
 cd ~/agents/researcher
-./run.sh --runtime claude
+pip install -r requirements.txt
+python run.py
 ```
 
 ## What Gets Created
@@ -23,9 +24,11 @@ cd ~/agents/researcher
 ```
 <target-dir>/
   AGENTS.md          # Behavioral rules (always loaded by the agent)
-  TOOLS.md           # External tool documentation
-  MAILBOX.jsonl      # Human-agent communication (append-only)
-  run.sh             # Heartbeat launcher script
+  run.py             # Heartbeat launcher (Python, claude-agent-sdk)
+  requirements.txt   # Python dependencies
+  tool-notes/        # One file per non-native external tool
+  mailbox/
+    MAILBOX.jsonl    # Human-agent communication (append-only)
   Memory/
     knowledge/       # Distilled long-term knowledge
       factual/
@@ -34,27 +37,29 @@ cd ~/agents/researcher
       metacognitive/
     episodes/        # Bounded execution records
   skills/            # Reusable executable capabilities
-  Runtime/           # Scheduler state
+  Runtime/           # Scheduler state (session ID, PID, heartbeat)
 ```
 
-## run.sh Options
+## run.py Options
 
 ```
-./run.sh --runtime codex|claude [--interval N]
+python run.py [--interval N] [--max-turns N] [--max-budget USD]
 ```
 
-- `--runtime` (required): Which runtime to use — `codex` or `claude`
 - `--interval` (optional): Heartbeat interval in minutes (default: 20)
+- `--max-turns` (optional): Max agent turns per heartbeat (default: 50)
+- `--max-budget` (optional): Max USD budget per heartbeat (default: 5.0)
 
 ## Requirements
 
-- bash
-- sed (macOS built-in)
-- `codex` or `claude` CLI installed and configured
+- Python 3.10+
+- `claude-agent-sdk` (`pip install -r requirements.txt`)
+- `claude` CLI installed and configured (the SDK depends on it)
 
 ## Design
 
-- **Pure bash, zero dependencies** — only needs bash + sed + codex/claude CLI
-- **Templates as separate files** — easier to maintain than heredocs embedded in script
-- **Heartbeat in run.sh, not in the agent** — agent does work, shell handles scheduling
+- **Python SDK for agent runtime** — session persistence, structured results, hook callbacks
+- **Templates as separate files** — easier to maintain than embedded strings
+- **Heartbeat in run.py, not in the agent** — agent does work, launcher handles scheduling
+- **Session resumption across heartbeats** — context carries over via `resume=session_id`
 - **Append-only mailbox** — simple, auditable human-agent communication

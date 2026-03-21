@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""run.py — Heartbeat launcher for {{AGENT_NAME}}
+
+Created: {{CREATED_AT}}
+
+Usage:
+    python run.py [--interval N] [--max-turns N] [--max-budget USD]
+
+Options:
+    --interval     Heartbeat interval in minutes (default: 20)
+    --max-turns    Max agent turns per heartbeat (default: 50)
+    --max-budget   Max USD budget per heartbeat (default: 5.0)
+"""
+
+import argparse
+import asyncio
+import json
+import os
+import signal
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, AssistantMessage, query
+
+# ─── Paths ────────────────────────────────────────────────────────────
+
+AGENT_DIR = Path(__file__).resolve().parent
+RUNTIME_DIR = AGENT_DIR / "Runtime"
+MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
+PID_FILE = RUNTIME_DIR / "pid"
+HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
+STATE_FILE = RUNTIME_DIR / "state"
+SESSION_FILE = RUNTIME_DIR / "session_id"
+AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
+
+# ─── Globals ──────────────────────────────────────────────────────────
+
+shutdown_requested = False
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def log(msg: str):
+    print(f"[{utcnow()}] {msg}", flush=True)
+
+
+# ─── Signal handling ──────────────────────────────────────────────────
+
+def handle_signal(signum, frame):
+    global shutdown_requested
+    log(f"Received signal {signum}. Shutting down {{AGENT_NAME}}...")
+    shutdown_requested = True
+
+
+signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, handle_signal)
+
+
+# ─── PID management ──────────────────────────────────────────────────
+
+def check_and_write_pid():
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+
+    if PID_FILE.exists():
+        old_pid = int(PID_FILE.read_text().strip())
+        try:
+            os.kill(old_pid, 0)
+            print(f"Error: {{AGENT_NAME}} is already running (PID {old_pid})")
+            sys.exit(1)
+        except OSError:
+            log(f"Stale PID file found (PID {old_pid} not running). Cleaning up.")
+            PID_FILE.unlink()
+
+    PID_FILE.write_text(str(os.getpid()))
+
+
+def cleanup_pid():
+    PID_FILE.unlink(missing_ok=True)
+    STATE_FILE.write_text("stopped")
+
+
+# ─── Mailbox helpers ─────────────────────────────────────────────────
+
+def has_new_human_messages() -> bool:
+    if not MAILBOX.exists():
+        return False
+
+    last_agent_line = -1
+    last_human_line = -1
+
+    for i, line in enumerate(MAILBOX.read_text().splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("role") == "agent":
+            last_agent_line = i
+        elif msg.get("role") == "human":
+            last_human_line = i
+
+    if last_human_line < 0:
+        return False
+    if last_agent_line < 0:
+        return True
+    return last_human_line > last_agent_line
+
+
+def check_awaiting_human() -> bool:
+    """Return True if we should skip this heartbeat (waiting for human)."""
+    if AWAITING_FILE.exists():
+        if not has_new_human_messages():
+            log("Awaiting human response. Skipping heartbeat.")
+            return True
+        else:
+            AWAITING_FILE.unlink(missing_ok=True)
+    return False
+
+
+# ─── Session management ──────────────────────────────────────────────
+
+def load_session_id() -> str | None:
+    if SESSION_FILE.exists():
+        sid = SESSION_FILE.read_text().strip()
+        return sid if sid else None
+    return None
+
+
+def save_session_id(session_id: str):
+    SESSION_FILE.write_text(session_id)
+
+
+# ─── Prompt building ─────────────────────────────────────────────────
+
+def build_prompt(first_heartbeat: bool) -> str:
+    if first_heartbeat:
+        return (
+            "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
+            "Read AGENTS.md to understand your behavioral rules.\n"
+            "Read mailbox/MAILBOX.jsonl for any initial instructions.\n"
+            "Then begin working on your assigned task.\n\n"
+            f"Working directory: {AGENT_DIR}"
+        )
+    else:
+        return (
+            "Heartbeat wakeup for {{AGENT_NAME}}.\n\n"
+            "1. Read mailbox/MAILBOX.jsonl for new messages.\n"
+            "2. If awaiting human input and no new human message, "
+            "write 'awaiting' to Runtime/awaiting_human and stop.\n"
+            "3. Otherwise, continue your current work.\n\n"
+            f"Working directory: {AGENT_DIR}"
+        )
+
+
+# ─── Agent invocation ────────────────────────────────────────────────
+
+async def invoke_agent(prompt: str, max_turns: int, max_budget: float) -> str | None:
+    session_id = load_session_id()
+
+    options = ClaudeAgentOptions(
+        cwd=str(AGENT_DIR),
+        allowed_tools=[
+            "Read", "Write", "Edit", "Bash", "Glob", "Grep",
+            "WebSearch", "WebFetch",
+        ],
+        max_turns=max_turns,
+        max_budget_usd=max_budget,
+        permission_mode="bypassPermissions",
+    )
+
+    if session_id:
+        options.resume = session_id
+        log(f"Resuming session: {session_id}")
+    else:
+        log("Starting new session")
+
+    new_session_id = None
+
+    async for message in query(prompt=prompt, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if hasattr(block, "text"):
+                    log(f"Agent: {block.text[:200]}")
+                elif hasattr(block, "name"):
+                    log(f"Tool call: {block.name}")
+
+        if isinstance(message, ResultMessage):
+            new_session_id = message.session_id
+
+            if message.subtype == "success":
+                log(f"Heartbeat completed. Turns: {message.num_turns}, "
+                    f"Cost: ${message.total_cost_usd or 0:.4f}")
+            elif message.subtype == "error_max_turns":
+                log(f"Hit max turns ({max_turns}). Will resume next heartbeat.")
+            elif message.subtype == "error_max_budget_usd":
+                log(f"Hit budget limit (${max_budget}). Will resume next heartbeat.")
+            else:
+                log(f"Agent ended with: {message.subtype}")
+
+    if new_session_id:
+        save_session_id(new_session_id)
+
+    return new_session_id
+
+
+# ─── Main loop ────────────────────────────────────────────────────────
+
+async def main():
+    parser = argparse.ArgumentParser(description="Heartbeat launcher for {{AGENT_NAME}}")
+    parser.add_argument("--interval", type=int, default=20,
+                        help="Heartbeat interval in minutes (default: 20)")
+    parser.add_argument("--max-turns", type=int, default=50,
+                        help="Max agent turns per heartbeat (default: 50)")
+    parser.add_argument("--max-budget", type=float, default=5.0,
+                        help="Max USD budget per heartbeat (default: 5.0)")
+    args = parser.parse_args()
+
+    check_and_write_pid()
+
+    print("╔══════════════════════════════════════════════════════════╗")
+    print("║  {{AGENT_NAME}} — Starting                              ")
+    print(f"║  Interval:  {args.interval} minutes                    ")
+    print(f"║  PID:       {os.getpid()}                              ")
+    print(f"║  Directory: {AGENT_DIR}                                ")
+    print("╚══════════════════════════════════════════════════════════╝")
+    print()
+
+    first_heartbeat = load_session_id() is None
+
+    try:
+        while not shutdown_requested:
+            # Record heartbeat
+            HEARTBEAT_FILE.write_text(utcnow())
+            STATE_FILE.write_text("running")
+
+            log("Heartbeat — starting")
+
+            # Check if waiting for human
+            if check_awaiting_human():
+                log(f"Sleeping {args.interval} minutes...")
+                await asyncio.sleep(args.interval * 60)
+                continue
+
+            # Build prompt and invoke
+            prompt = build_prompt(first_heartbeat)
+
+            try:
+                await invoke_agent(prompt, args.max_turns, args.max_budget)
+            except Exception as e:
+                log(f"Runtime error: {e}")
+
+            first_heartbeat = False
+
+            log(f"Heartbeat complete. Sleeping {args.interval} minutes...")
+            await asyncio.sleep(args.interval * 60)
+    finally:
+        cleanup_pid()
+        log("{{AGENT_NAME}} stopped.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

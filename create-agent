@@ -81,14 +81,13 @@ render_template() {
 # ─── Render templates ───────────────────────────────────────────────
 
 render_template "${TEMPLATE_DIR}/AGENTS.md.tmpl"            "${TARGET_DIR}/AGENTS.md"
-render_template "${TEMPLATE_DIR}/run.sh.tmpl"                "${TARGET_DIR}/run.sh"
+render_template "${TEMPLATE_DIR}/run.py.tmpl"                "${TARGET_DIR}/run.py"
+render_template "${TEMPLATE_DIR}/requirements.txt.tmpl"      "${TARGET_DIR}/requirements.txt"
 render_template "${TEMPLATE_DIR}/knowledge-README.md.tmpl"   "${TARGET_DIR}/Memory/knowledge/README.md"
 render_template "${TEMPLATE_DIR}/episodes-README.md.tmpl"    "${TARGET_DIR}/Memory/episodes/README.md"
 render_template "${TEMPLATE_DIR}/tool-notes-README.md.tmpl"  "${TARGET_DIR}/tool-notes/README.md"
 render_template "${TEMPLATE_DIR}/mailbox-README.md.tmpl"     "${TARGET_DIR}/mailbox/README.md"
 render_template "${TEMPLATE_DIR}/MAILBOX.jsonl.tmpl"         "${TARGET_DIR}/mailbox/MAILBOX.jsonl"
-
-chmod +x "${TARGET_DIR}/run.sh"
 
 # ─── Summary ────────────────────────────────────────────────────────
 
@@ -103,5 +102,6 @@ echo ""
 echo "To start the agent:"
 echo ""
 echo "  cd ${TARGET_DIR}"
-echo "  ./run.sh --runtime claude    # or --runtime codex"
+echo "  pip install -r requirements.txt"
+echo "  python run.py"
 echo ""
