@@ -65,7 +65,7 @@ start_bridge_if_configured() {
 
   nohup bash -c '
     while true; do
-      "'"${AGENT_DIR}"'/.venv/bin/python" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
+      uv run --python "'"${AGENT_DIR}"'/.venv/bin/python" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
       printf "[%s] [bridge-supervisor] bridge exited, restarting in 5s.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"'"${BRIDGE_LOG}"'"
       sleep 5
     done
@@ -85,6 +85,11 @@ mkdir -p "$RUNTIME_DIR"
 
 if [[ -z "${NODE_BIN}" ]]; then
   echo "node is not installed or not on PATH."
+  exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is not installed or not on PATH."
   exit 1
 fi
 

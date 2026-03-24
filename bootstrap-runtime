@@ -134,7 +134,7 @@ ensure_node_deps() {
 seed_initial_goal() {
   local result
   result="$(
-    WORKDIR="${WORKDIR}" GOAL="${GOAL}" python3 - <<'PY'
+    WORKDIR="${WORKDIR}" GOAL="${GOAL}" uv run --python "${WORKDIR}/.venv/bin/python" - <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -229,7 +229,7 @@ start_web_ui() {
   fi
 
   rm -f "${web_ui_pid_file}"
-  nohup "${python_bin}" "${web_ui_script}" --host "${WEB_UI_HOST}" --port "${WEB_UI_PORT}" >"${web_ui_log}" 2>&1 &
+  nohup uv run --python "${python_bin}" "${web_ui_script}" --host "${WEB_UI_HOST}" --port "${WEB_UI_PORT}" >"${web_ui_log}" 2>&1 &
   web_ui_pid="$!"
   echo "${web_ui_pid}" > "${web_ui_pid_file}"
 }
