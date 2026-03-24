@@ -59,7 +59,7 @@ start_bridge_if_configured() {
 
   nohup bash -c '
     while true; do
-      "'"${PYTHON_BIN}"'" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
+      uv run --python "'"${PYTHON_BIN}"'" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
       printf "[%s] [bridge-supervisor] bridge exited, restarting in 5s.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"'"${BRIDGE_LOG}"'"
       sleep 5
     done
@@ -80,6 +80,11 @@ mkdir -p "$RUNTIME_DIR"
 if [[ ! -x "${PYTHON_BIN}" ]]; then
   echo "Missing local virtualenv at ${PYTHON_BIN}."
   echo "Run: uv venv && uv pip install --python .venv/bin/python -r requirements.txt"
+  exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is not installed or not on PATH."
   exit 1
 fi
 
@@ -109,7 +114,7 @@ fi
 
 start_bridge_if_configured
 
-nohup "${PYTHON_BIN}" "${AGENT_DIR}/run.py" "$@" >"${RUNNER_LOG}" 2>&1 &
+nohup uv run --python "${PYTHON_BIN}" "${AGENT_DIR}/run.py" "$@" >"${RUNNER_LOG}" 2>&1 &
 launcher_pid="$!"
 
 for _ in $(seq 1 20); do

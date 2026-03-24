@@ -33,6 +33,9 @@ npm install
 ```
 <target-dir>/
   AGENTS.md          # Behavioral rules (always loaded by the agent)
+  .agents/skills/    # Codex project skills
+  .claude/skills/    # Claude project skills
+  skills/            # Shared skill implementations
   run.py             # Claude heartbeat launcher
   run_codex.mjs      # Codex heartbeat launcher (official Codex SDK)
   start-claude.sh    # One-command Claude startup
@@ -51,7 +54,6 @@ npm install
       heuristic/
       metacognitive/
     episodes/        # Bounded execution records
-  skills/            # Reusable executable capabilities
   Runtime/           # Scheduler state (session ID, PID, heartbeat)
 ```
 
@@ -59,10 +61,13 @@ Generated workspaces now also include:
 
 - `mailbox_io.py` — shared append-only mailbox helper
 - `mailbox_feishu_bridge.py` — optional Feishu <-> mailbox bridge
-- `skills/mailbox-send/` — skill for agent-authored mailbox messages
+- `web_ui_server.py` — optional browser-based mailbox/status UI
+- `.agents/skills/mailbox-send/` — Codex project skill entrypoint
+- `.claude/skills/mailbox-send/` — Claude project skill entrypoint
+- `skills/mailbox-send/scripts/` — shared mailbox-send implementation
 - `mailbox_bridge.env.example` — bridge environment template
 
-If `mailbox_bridge.env` exists, `start-claude.sh` and `start-codex.sh` will start the bridge automatically.
+If `mailbox_bridge.env` exists, `start-claude.sh` and `start-codex.sh` will start the Feishu bridge automatically.
 
 To enable the bridge in a generated workspace:
 
@@ -70,6 +75,31 @@ To enable the bridge in a generated workspace:
 cp mailbox_bridge.env.example mailbox_bridge.env
 ./start-claude.sh
 ```
+
+To run the simple Web UI in a generated workspace:
+
+```bash
+uv run --python .venv/bin/python ./web_ui_server.py --host 127.0.0.1 --port 8080
+```
+
+## Bootstrap Runtime
+
+`bootstrap-runtime` now requires an explicit interaction mode:
+
+```bash
+./bootstrap-runtime \
+  --goal "Goal text" \
+  --provider codex \
+  --interaction feishu|web-ui \
+  --interval 20 \
+  --workdir /abs/path/to/runtime
+```
+
+Rules:
+
+- `--interaction feishu`: requires `--feishu-app-id`, `--feishu-app-secret`, `--feishu-chat-id`
+- `--interaction web-ui`: must not include Feishu arguments
+- Feishu and Web UI are mutually exclusive in one runtime launch
 
 ## Runtime Launchers
 
@@ -112,6 +142,7 @@ The Codex runtime persists the active thread ID in `Runtime/codex_thread_id`, re
 - **Separate Claude and Codex runtime entrypoints** — one workspace, two launch paths
 - **One-command startup scripts** — launch runtime and optional bridge together
 - **Codex runtime on the official Codex SDK** — same auth model as Codex CLI, resumable threads, streamed events
+- **Dual-compatible project skills** — Codex loads `.agents/skills`, Claude loads `.claude/skills`, both share the same implementation script
 - **Templates as separate files** — easier to maintain than embedded strings
 - **Heartbeat in provider-specific runners, not in the agent** — agent does work, launcher handles scheduling
 - **Session resumption across heartbeats** — Claude resumes via `session_id`, Codex resumes via `thread_id`
