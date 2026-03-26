@@ -1,0 +1,56 @@
+---
+name: mailbox-operate
+description: Operate mailbox/MAILBOX.jsonl with two commands: mailbox-send for agent-authored writes, and mailbox-read for reading unread human messages or the latest N human messages.
+---
+
+# mailbox-operate
+
+Use this skill for mailbox operations. It provides two commands:
+
+- `mailbox-send`: append an agent-authored mailbox entry
+- `mailbox-read`: read mailbox messages for agent consumption
+
+## Before first use
+
+Read `mailbox/README.md`.
+
+## mailbox-send
+
+Progress update:
+
+```bash
+uv run python skills/mailbox-operate/scripts/send_mailbox.py --kind update --message "Implemented the first pass."
+```
+
+Need a human decision and pause:
+
+```bash
+uv run python skills/mailbox-operate/scripts/send_mailbox.py --kind decision --await-reply --message "Need decision: keep Claude support or remove it."
+```
+
+Multi-line message from stdin:
+
+```bash
+cat /tmp/message.txt | uv run python skills/mailbox-operate/scripts/send_mailbox.py --kind blocker --await-reply
+```
+
+## mailbox-read
+
+Read latest unread human messages (default; tracked by last-read state):
+
+```bash
+uv run python skills/mailbox-operate/scripts/read_mailbox.py
+```
+
+Read latest N human messages:
+
+```bash
+uv run python skills/mailbox-operate/scripts/read_mailbox.py 5
+```
+
+## Rules
+
+- Prefer skill scripts over manual JSONL edits.
+- Keep agent-authored mailbox messages concise and decision-oriented.
+- Use `--await-reply` only when you truly need to pause until a human answers.
+- `mailbox-read` stores last-read state at `Runtime/mailbox_read_human_last_id`.

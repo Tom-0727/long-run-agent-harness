@@ -55,9 +55,9 @@ Generated workspaces now also include:
 - `mailbox_io.py` — shared append-only mailbox helper
 - `mailbox_feishu_bridge.py` — optional Feishu <-> mailbox bridge
 - `web_ui_server.py` — optional browser-based mailbox/status UI
-- `.agents/skills/mailbox-send/` — Codex project skill entrypoint
-- `.claude/skills/mailbox-send/` — Claude project skill entrypoint
-- `skills/mailbox-send/scripts/` — shared mailbox-send implementation
+- `.agents/skills/mailbox-operate/` — Codex project skill entrypoint + scripts
+- `.claude/skills/mailbox-operate/` — Claude project skill entrypoint + scripts
+- `skills/mailbox-operate/scripts/` — shared mailbox-operate scripts
 - `mailbox_bridge.env.example` — bridge environment template
 
 If `mailbox_bridge.env` exists, the generated runner scripts invoked by `bootstrap-runtime` will start the Feishu bridge automatically.
