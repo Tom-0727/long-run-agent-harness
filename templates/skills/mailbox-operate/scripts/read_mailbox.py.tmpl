@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Read mailbox messages for agent consumption."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def resolve_agent_dir() -> Path:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
+        if (parent / "mailbox" / "MAILBOX.jsonl").exists() and (parent / "mailbox_io.py").exists():
+            return parent
+    raise SystemExit("unable to locate agent workspace root from script path")
+
+
+AGENT_DIR = resolve_agent_dir()
+sys.path.insert(0, str(AGENT_DIR))
+
+from mailbox_io import messages_after_id, read_messages
+
+
+def load_last_read_id(state_path: Path) -> str | None:
+    if not state_path.exists():
+        return None
+    value = state_path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
+def save_last_read_id(state_path: Path, mailbox_id: str) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(f"{mailbox_id}\n", encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Read mailbox messages. Without count, returns unread human messages since "
+            "last read state. With count, returns latest N human messages."
+        )
+    )
+    parser.add_argument(
+        "count",
+        nargs="?",
+        type=int,
+        help="Optional number of latest human messages to return",
+    )
+    args = parser.parse_args()
+
+    if args.count is not None and args.count <= 0:
+        raise SystemExit("count must be a positive integer")
+
+    mailbox_path = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
+    state_path = AGENT_DIR / "Runtime" / "mailbox_read_human_last_id"
+
+    if args.count is None:
+        last_read_id = load_last_read_id(state_path)
+        output = messages_after_id(mailbox_path, last_read_id, role="human")
+    else:
+        human_messages = [msg for msg in read_messages(mailbox_path) if msg.get("role") == "human"]
+        output = human_messages[-args.count :]
+
+    if output:
+        last_id = output[-1].get("id")
+        if isinstance(last_id, str) and last_id:
+            save_last_read_id(state_path, last_id)
+
+    print(json.dumps(output, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

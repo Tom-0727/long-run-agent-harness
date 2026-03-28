@@ -9,7 +9,15 @@ import sys
 from pathlib import Path
 
 
-AGENT_DIR = Path(__file__).resolve().parents[3]
+def resolve_agent_dir() -> Path:
+    script_path = Path(__file__).resolve()
+    for parent in script_path.parents:
+        if (parent / "mailbox" / "MAILBOX.jsonl").exists() and (parent / "mailbox_io.py").exists():
+            return parent
+    raise SystemExit("unable to locate agent workspace root from script path")
+
+
+AGENT_DIR = resolve_agent_dir()
 sys.path.insert(0, str(AGENT_DIR))
 
 from mailbox_io import append_message

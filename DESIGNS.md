@@ -407,7 +407,7 @@ Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 
 实现建议：
 
-- 为智能体提供一个按需加载的 `mailbox-send` skill，避免手写 JSONL
+- 为智能体提供一个按需加载的 `mailbox-operate` skill（含 `mailbox-send`/`mailbox-read`），避免手写 JSONL
 - 外部通信（如飞书）应通过桥接进程与 `MAILBOX.jsonl` 双向同步
 - 人类从外部通信工具发送的消息，应先落盘到 `MAILBOX.jsonl`，再触发同一会话恢复
 - Python 脚本执行应统一通过 `uv run python ...`

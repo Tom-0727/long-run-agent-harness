@@ -158,7 +158,7 @@ ensure_workspace() {
     if [[ -z "${agent_name//[[:space:]]/}" ]]; then
       agent_name="$(derive_agent_name "${WORKDIR}")"
     fi
-    "${CREATE_AGENT}" "${WORKDIR}" "${agent_name}" >/dev/null
+    "${CREATE_AGENT}" "${WORKDIR}" "${agent_name}" "${GOAL}" >/dev/null
     RUNTIME_AGENT_NAME="${agent_name}"
     write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
     return
