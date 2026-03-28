@@ -11,16 +11,16 @@ One command creates workspace, installs deps, seeds goal, and starts runtime.
 
 ```bash
 ./bootstrap-runtime \
-  --goal "检查自己的所有机制是否正常，核心关注 skills 机制是否有 mailbox-operate 和 skill-creator" \
-  --agent-name "SelfCheckBot" \
-  --provider codex \
+  --goal "检查自己的所有机制是否正常，检查 skills 机制是否有 mailbox-operate 和 skill-creator；另外检查 Subagent机制是否可正常使用，尝试调用Evaluator" \
+  --agent-name "SelfCheckBotCc" \
+  --provider claude \
   --interaction web-ui \
-  --web-ui-port 8080 \
+  --web-ui-port 8888 \
   --interval 8 \
-  --workdir ~/agents/self-check-bot
+  --workdir ~/agents/self-check-bot-cc
 ```
 
-Then open `http://127.0.0.1:8080`.
+Then open `http://127.0.0.1:8888`.
 
 ## Template Layout
 
@@ -74,7 +74,7 @@ Also included:
 - `mailbox_io.py` — shared append-only mailbox helper
 - `mailbox_feishu_bridge.py` — optional Feishu <-> mailbox bridge
 - `web_ui_server.py` — optional browser-based mailbox/status UI
-- `skills/mailbox-operate/scripts/` — shared mailbox-operate scripts
+- `<provider-skill-root>/skills/mailbox-operate/` — self-contained mailbox-operate skill (SKILL.md + scripts)
 - `mailbox_bridge.env.example` — bridge environment template
 
 If `mailbox_bridge.env` exists, generated runner scripts invoked by `bootstrap-runtime` will start the Feishu bridge automatically.
@@ -115,7 +115,7 @@ Rules:
 - **Provider-separated templates** — `shared/` + `providers/<provider>/`
 - **Provider-specific launchers managed internally** — bootstrap orchestrates workspace runner scripts
 - **Codex runtime on the official Codex SDK** — same auth model as Codex CLI, resumable threads, streamed events
-- **Dual project skill roots with shared scripts** — Codex loads `.agents/skills`, Claude loads `.claude/skills`, both can call `skills/mailbox-operate/scripts`
+- **Self-contained provider skills** — Codex loads `.agents/skills`, Claude loads `.claude/skills`, each with SKILL.md + scripts in one directory
 - **Heartbeat in provider-specific runners, not in the agent** — agent does work, launcher handles scheduling
 - **Session resumption across heartbeats** — Claude resumes via `session_id`, Codex resumes via `thread_id`
 - **Append-only mailbox** — simple, auditable human-agent communication
