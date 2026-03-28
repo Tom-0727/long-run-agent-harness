@@ -1,4 +1,4 @@
-# task-forge
+# LifeLong Running Agent Harness
 
 Scaffold tool for creating autonomous Agent workspaces. One command creates a complete workspace with behavioral rules, memory structure, communication mailbox, and a heartbeat launcher.
 
@@ -11,13 +11,13 @@ One command creates workspace, installs deps, seeds goal, and starts runtime.
 
 ```bash
 ./bootstrap-runtime \
-  --goal "检查自己的所有机制是否正常，检查 skills 机制是否有 mailbox-operate 和 skill-creator；另外检查 Subagent机制是否可正常使用，尝试调用Evaluator" \
+  --goal "检查自己的所有机制是否正常，检查 skills 机制是否有 mailbox-operate 和 skill-creator；另外检查 Subagent机制是否可正常使用" \
   --agent-name "SelfCheckBotCc" \
-  --provider claude \
+  --provider codex \
   --interaction web-ui \
   --web-ui-port 8888 \
   --interval 8 \
-  --workdir ~/agents/self-check-bot-cc
+  --workdir ~/agents/self-check-bot-co
 ```
 
 Then open `http://127.0.0.1:8888`.
