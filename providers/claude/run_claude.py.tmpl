@@ -202,7 +202,7 @@ def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
             "1. Read mailbox/MAILBOX.jsonl immediately.\n"
             "2. Find and address the newest human message(s).\n"
             "3. Continue the same task in the current session.\n"
-            "4. If you need to reply, use mailbox-operate/mailbox-send.\n\n"
+            "4. If you need to reply, run: uv run python .claude/skills/mailbox-operate/scripts/send_mailbox.py --kind update --message \"...\"\n\n"
             f"Latest pending mailbox id: {pending_id}\n"
             f"Working directory: {AGENT_DIR}"
         )
@@ -212,18 +212,17 @@ def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
             "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
             "Read CLAUDE.md to understand your behavioral rules.\n"
             "Read mailbox/MAILBOX.jsonl for any initial instructions.\n"
-            "Use mailbox-operate/mailbox-read to read mailbox updates and mailbox-send for agent-authored mailbox messages.\n"
-            "If you need to pause for a human reply, use mailbox-send with its await-reply option.\n"
+            "For mailbox operations, run scripts directly via Bash (see CLAUDE.md Skills Usage section).\n"
+            "If you need to pause for a human reply, use send_mailbox.py with --await-reply.\n"
             "Then begin working on your assigned task.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
     else:
         return (
             "Heartbeat wakeup for {{AGENT_NAME}}.\n\n"
-            "1. Read mailbox updates with mailbox-operate/mailbox-read.\n"
-            "2. If you need to pause for a human reply, use mailbox-send with its await-reply option and stop.\n"
-            "3. Use mailbox-operate/mailbox-send for any agent-authored mailbox message.\n"
-            "4. Otherwise, continue your current work.\n\n"
+            "1. Read mailbox updates: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py\n"
+            "2. If you need to pause for a human reply, use send_mailbox.py with --await-reply and stop.\n"
+            "3. Otherwise, continue your current work.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
 

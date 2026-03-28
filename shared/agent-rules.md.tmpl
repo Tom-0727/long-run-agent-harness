@@ -18,21 +18,22 @@ You persist knowledge, record episodes, make skills and communicate with humans 
 
 ```
 ./
-  {{RULES_FILENAME}} # This file — your behavioral rules (always loaded)
-  skills/            # Skill library (shared scripts/assets)
-  tool-notes/        # One file per non-native external tool
+  {{RULES_FILENAME}}          # This file — your behavioral rules (always loaded)
+  {{PROVIDER_SKILL_DIR}}/
+    skills/                   # Auto-discovered skills
+  tool-notes/                 # One file per non-native external tool
   mailbox/
-    MAILBOX.jsonl    # Human-agent shared mailbox (append-only)
+    MAILBOX.jsonl             # Human-agent shared mailbox (append-only)
   Memory/
-    knowledge/       # Distilled long-term knowledge
+    knowledge/                # Distilled long-term knowledge
       factual/
       conceptual/
       heuristic/
       metacognitive/
-    episodes/        # Bounded execution records
-  requirements.txt   # Python dependencies for runtime + bridge + skills
-  package.json       # Optional Node dependency for the Codex runtime
-  Runtime/           # Scheduler state (managed by the selected runtime)
+    episodes/                 # Bounded execution records
+  requirements.txt            # Python dependencies for runtime + bridge + skills
+  package.json                # Optional Node dependency for the Codex runtime
+  Runtime/                    # Scheduler state (managed by the selected runtime)
 ```
 
 ## Memory/knowledge — Distilled Knowledge

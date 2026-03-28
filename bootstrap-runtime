@@ -182,6 +182,7 @@ render_template() {
   CREATED_AT="$created_at" \
   CREATED_DATE="$created_date" \
   RULES_FILENAME="$rules_filename" \
+  PROVIDER_SKILL_DIR="$(provider_skill_root "${PROVIDER}")/skills" \
   python3 - <<'PY'
 from pathlib import Path
 import os
@@ -196,6 +197,7 @@ for key in (
     "CREATED_AT",
     "CREATED_DATE",
     "RULES_FILENAME",
+    "PROVIDER_SKILL_DIR",
 ):
     content = content.replace(f"{{{{{key}}}}}", os.environ[key])
 
@@ -289,7 +291,6 @@ scaffold_workspace() {
   mkdir -p "${WORKDIR}/Memory/episodes"
   mkdir -p "${WORKDIR}/tool-notes"
   mkdir -p "${WORKDIR}/mailbox"
-  mkdir -p "${WORKDIR}/skills/mailbox-operate/scripts"
   mkdir -p "${WORKDIR}/Runtime"
   mkdir -p "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts"
   mkdir -p "${WORKDIR}/${provider_skill_dir}/agents"
@@ -365,14 +366,6 @@ scaffold_workspace() {
     "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
-  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/send_mailbox.py.tmpl" \
-    "${WORKDIR}/skills/mailbox-operate/scripts/send_mailbox.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
-    "${WORKDIR}/skills/mailbox-operate/scripts/read_mailbox.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
   if [[ "${PROVIDER}" == "codex" ]]; then
     render_template "${provider_template_dir}/run_codex.mjs.tmpl" \
       "${WORKDIR}/run_codex.mjs" \
@@ -415,8 +408,6 @@ scaffold_workspace() {
   chmod +x "${WORKDIR}/status-agent.sh"
   chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py"
   chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py"
-  chmod +x "${WORKDIR}/skills/mailbox-operate/scripts/send_mailbox.py"
-  chmod +x "${WORKDIR}/skills/mailbox-operate/scripts/read_mailbox.py"
 
   if [[ "${PROVIDER}" == "codex" ]]; then
     chmod +x "${WORKDIR}/run_codex.mjs"
