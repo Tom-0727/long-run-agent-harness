@@ -218,6 +218,60 @@ update_one_agent() {
   update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
     "${dir}/${skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" "${agent_name}" "${rules_filename}" "${provider}"
 
+  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/contacts.py.tmpl" \
+    "${dir}/${skill_dir}/skills/mailbox-operate/scripts/contacts.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+  # ── Mailbox migration: ensure new directory structure exists ──
+  if [[ "${DRY_RUN}" == "0" ]]; then
+    mkdir -p "${dir}/Runtime/pending_messages"
+    mkdir -p "${dir}/Runtime/awaiting_reply"
+    mkdir -p "${dir}/Runtime/mailbox_read_last_id"
+
+    # Migrate MAILBOX.jsonl -> human.jsonl if needed
+    if [[ -f "${dir}/mailbox/MAILBOX.jsonl" && ! -f "${dir}/mailbox/human.jsonl" ]]; then
+      cp "${dir}/mailbox/MAILBOX.jsonl" "${dir}/mailbox/human.jsonl"
+      echo "  [migrated] mailbox/MAILBOX.jsonl -> mailbox/human.jsonl"
+    fi
+
+    # Initialize contacts.json if missing
+    if [[ ! -f "${dir}/mailbox/contacts.json" ]]; then
+      local created_at
+      created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      cat > "${dir}/mailbox/contacts.json" <<EOF_CONTACTS
+{
+  "human": {
+    "type": "human",
+    "mailbox_file": "human.jsonl",
+    "connected_at": "${created_at}"
+  }
+}
+EOF_CONTACTS
+      echo "  [created] mailbox/contacts.json"
+    fi
+
+    # Migrate pending_human.json -> pending_messages/human.json
+    if [[ -f "${dir}/Runtime/pending_human.json" ]]; then
+      mv "${dir}/Runtime/pending_human.json" "${dir}/Runtime/pending_messages/human.json"
+      echo "  [migrated] Runtime/pending_human.json -> Runtime/pending_messages/human.json"
+    fi
+
+    # Migrate awaiting_human -> awaiting_reply/human
+    if [[ -f "${dir}/Runtime/awaiting_human" ]]; then
+      mv "${dir}/Runtime/awaiting_human" "${dir}/Runtime/awaiting_reply/human"
+      echo "  [migrated] Runtime/awaiting_human -> Runtime/awaiting_reply/human"
+    fi
+
+    # Migrate mailbox_read_human_last_id -> mailbox_read_last_id/human
+    if [[ -f "${dir}/Runtime/mailbox_read_human_last_id" ]]; then
+      mv "${dir}/Runtime/mailbox_read_human_last_id" "${dir}/Runtime/mailbox_read_last_id/human"
+      echo "  [migrated] Runtime/mailbox_read_human_last_id -> Runtime/mailbox_read_last_id/human"
+    fi
+
+    # Update mailbox/README.md
+    update_file "${SHARED_TEMPLATE_DIR}/mailbox-README.md.tmpl" \
+      "${dir}/mailbox/README.md" "${agent_name}" "${rules_filename}" "${provider}"
+  fi
+
   # ── Provider-specific files ──
   if [[ "${provider}" == "codex" ]]; then
     update_file "${provider_template_dir}/run_codex.mjs.tmpl" \
@@ -256,6 +310,7 @@ update_one_agent() {
       "${dir}/web_ui_server.py" \
       "${dir}/${skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" \
       "${dir}/${skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
+      "${dir}/${skill_dir}/skills/mailbox-operate/scripts/contacts.py" \
       2>/dev/null || true
 
     if [[ "${provider}" == "codex" ]]; then

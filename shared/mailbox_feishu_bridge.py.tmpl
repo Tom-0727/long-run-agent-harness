@@ -27,16 +27,16 @@ from mailbox_io import append_message, mailbox_contains_field, messages_after_id
 # ─── Paths ────────────────────────────────────────────────────────────
 
 AGENT_DIR = Path(__file__).resolve().parent
-MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
+HUMAN_MAILBOX = AGENT_DIR / "mailbox" / "human.jsonl"
 RUNTIME_DIR = AGENT_DIR / "Runtime"
 STATE_FILE = RUNTIME_DIR / "bridge-state.json"
-PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
+PENDING_MESSAGES_DIR = RUNTIME_DIR / "pending_messages"
 RUNTIME_STATE_FILE = RUNTIME_DIR / "state"
 PID_FILE = RUNTIME_DIR / "pid"
 BRIDGE_PID_FILE = RUNTIME_DIR / "bridge.pid"
 PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
 HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
-AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
+AWAITING_REPLY_DIR = RUNTIME_DIR / "awaiting_reply"
 CLAUDE_SESSION_FILE = RUNTIME_DIR / "claude_session_id"
 CODEX_THREAD_FILE = RUNTIME_DIR / "codex_thread_id"
 CLAUDE_LOG_FILE = RUNTIME_DIR / "claude.log"
@@ -148,11 +148,11 @@ def short_id(value: str, keep: int = 12) -> str:
 
 
 def tail_mailbox_entries(limit: int) -> list[dict]:
-    if not MAILBOX.exists():
+    if not HUMAN_MAILBOX.exists():
         return []
 
     entries: list[dict] = []
-    for line in MAILBOX.read_text(encoding="utf-8").splitlines():
+    for line in HUMAN_MAILBOX.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -220,7 +220,7 @@ def command_status_text() -> str:
     elif provider == "claude" and CLAUDE_SESSION_FILE.exists():
         session_value = short_id(read_text(CLAUDE_SESSION_FILE))
 
-    pending = read_json_file(PENDING_HUMAN_FILE)
+    pending = read_json_file(PENDING_MESSAGES_DIR / "human.json")
 
     lines = [
         "{{AGENT_NAME}}",
@@ -229,9 +229,9 @@ def command_status_text() -> str:
         f"bridge: {bridge_status}" + (f" pid={bridge_pid}" if bridge_pid else ""),
         f"state: {runtime_state}",
         f"last heartbeat: {heartbeat_line}",
-        f"awaiting_human: {'yes' if AWAITING_FILE.exists() else 'no'}",
+        f"awaiting_reply: {'yes' if AWAITING_REPLY_DIR.is_dir() and any(AWAITING_REPLY_DIR.iterdir()) else 'no'}",
         f"session: {session_value}",
-        f"pending_human: {pending.get('mailbox_id', 'none') if pending else 'none'}",
+        f"pending_messages: {pending.get('mailbox_id', 'none') if pending else 'none'}",
     ]
 
     return "\n".join(lines)
@@ -347,14 +347,14 @@ def record_recent_inbound_id(state: dict, message_id: str) -> None:
 
 
 def write_pending_human(entry: dict) -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    PENDING_MESSAGES_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "mailbox_id": entry["id"],
         "ts": entry["ts"],
         "source": "feishu",
         "feishu_message_id": entry.get("feishu_message_id"),
     }
-    PENDING_HUMAN_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (PENDING_MESSAGES_DIR / "human.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def format_outbound_text(entry: dict) -> str:
@@ -420,7 +420,7 @@ def outbound_worker(client: lark.Client) -> None:
                 continue
 
             last_id = state.get("last_outbound_mailbox_id") or None
-            for entry in messages_after_id(MAILBOX, last_id, role="agent"):
+            for entry in messages_after_id(HUMAN_MAILBOX, last_id, sender="{{AGENT_NAME}}"):
                 text = format_outbound_text(entry)
                 send_text(client, chat_id, text)
                 state["last_outbound_mailbox_id"] = entry["id"]
@@ -456,7 +456,7 @@ def on_message(data: P2ImMessageReceiveV1) -> None:
         for value in state.get("recent_inbound_feishu_message_ids", [])
         if isinstance(value, str)
     }
-    if msg.message_id in recent_ids or mailbox_contains_field(MAILBOX, "feishu_message_id", msg.message_id):
+    if msg.message_id in recent_ids or mailbox_contains_field(HUMAN_MAILBOX, "feishu_message_id", msg.message_id):
         return
 
     try_send_inbound_ack(msg.message_id)
@@ -484,8 +484,9 @@ def on_message(data: P2ImMessageReceiveV1) -> None:
             return
 
     entry = append_message(
-        MAILBOX,
-        role="human",
+        HUMAN_MAILBOX,
+        from_id="human",
+        to_id="{{AGENT_NAME}}",
         task_id="task.human.reply",
         message=text,
         extra={

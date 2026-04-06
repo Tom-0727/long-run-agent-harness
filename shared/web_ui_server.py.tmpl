@@ -14,16 +14,16 @@ from urllib.parse import parse_qs, urlparse
 from mailbox_io import append_message, read_messages
 
 AGENT_DIR = Path(__file__).resolve().parent
-MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
+HUMAN_MAILBOX = AGENT_DIR / "mailbox" / "human.jsonl"
 RUNTIME_DIR = AGENT_DIR / "Runtime"
-PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
+PENDING_MESSAGES_DIR = RUNTIME_DIR / "pending_messages"
 RUNNER_PID_FILE = RUNTIME_DIR / "pid"
 BRIDGE_PID_FILE = RUNTIME_DIR / "bridge.pid"
 WEB_UI_PID_FILE = RUNTIME_DIR / "web_ui.pid"
 PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
 STATE_FILE = RUNTIME_DIR / "state"
 HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
-AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
+AWAITING_REPLY_DIR = RUNTIME_DIR / "awaiting_reply"
 INTERACTION_MODE_FILE = RUNTIME_DIR / "interaction_mode"
 
 
@@ -80,19 +80,20 @@ def status_payload() -> dict:
         "bridge": pid_status(BRIDGE_PID_FILE),
         "web_ui": pid_status(WEB_UI_PID_FILE),
         "last_heartbeat": format_ts(heartbeat) if heartbeat else "none",
-        "awaiting_human": AWAITING_FILE.exists(),
+        "awaiting_human": AWAITING_REPLY_DIR.is_dir() and any(AWAITING_REPLY_DIR.iterdir()) if AWAITING_REPLY_DIR.is_dir() else False,
     }
 
 
 def history_payload(limit: int) -> list[dict]:
-    messages = read_messages(MAILBOX)
+    messages = read_messages(HUMAN_MAILBOX)
     rendered: list[dict] = []
     for message in messages[-limit:]:
         rendered.append(
             {
                 "id": str(message.get("id", "")),
                 "ts": format_ts(str(message.get("ts", ""))),
-                "role": str(message.get("role", "")),
+                "from": str(message.get("from", message.get("role", ""))),
+                "to": str(message.get("to", "")),
                 "task_id": str(message.get("task_id", "")),
                 "message": str(message.get("message", "")),
             }
@@ -101,13 +102,13 @@ def history_payload(limit: int) -> list[dict]:
 
 
 def write_pending_human(entry: dict) -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    PENDING_MESSAGES_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "mailbox_id": entry["id"],
         "ts": entry["ts"],
         "source": "web-ui",
     }
-    PENDING_HUMAN_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (PENDING_MESSAGES_DIR / "human.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 HTML = """<!doctype html>
@@ -517,7 +518,7 @@ async function loadStatus(force = false) {
 
 function renderMessage(item) {
   const wrap = document.createElement('div');
-  const isHuman = item.role === 'human';
+  const isHuman = (item.from || item.role) === 'human';
   wrap.className = `msg ${isHuman ? 'human' : 'agent'}`;
 
   const meta = document.createElement('div');
@@ -688,8 +689,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         entry = append_message(
-            MAILBOX,
-            role="human",
+            HUMAN_MAILBOX,
+            from_id="human",
+            to_id="{{AGENT_NAME}}",
             task_id="task.human.reply",
             message=message,
             extra={"source": "web-ui"},

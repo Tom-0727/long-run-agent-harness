@@ -1,14 +1,15 @@
 ---
 name: mailbox-operate
-description: Operate mailbox/MAILBOX.jsonl with two commands: mailbox-send for agent-authored writes, and mailbox-read for reading unread human messages or the latest N human messages.
+description: Operate the mailbox system with three commands: mailbox-send for sending messages, mailbox-read for reading messages, and mailbox-contacts for listing contacts.
 ---
 
 # mailbox-operate
 
-Use this skill for mailbox operations. It provides two commands:
+Use this skill for all mailbox operations. It provides three commands:
 
-- `mailbox-send`: append an agent-authored mailbox entry
-- `mailbox-read`: read mailbox messages for agent consumption
+- `mailbox-send`: send a message to human or another agent
+- `mailbox-read`: read messages from a specific contact or get unread summary
+- `mailbox-contacts`: list all contacts
 
 ## Before first use
 
@@ -16,19 +17,31 @@ Read `mailbox/README.md`.
 
 ## mailbox-send
 
-Progress update:
+Send to human (default):
 
 ```bash
 uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py --kind update --message "Implemented the first pass."
 ```
 
-Need a human decision and pause:
+Send to another agent:
 
 ```bash
-uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py --kind decision --await-reply --message "Need decision: keep Claude support or remove it."
+uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py --to jarvis --message "Need your analysis results."
 ```
 
-Multi-line message from stdin:
+Broadcast to all agent contacts:
+
+```bash
+uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py --broadcast --message "Phase 1 complete."
+```
+
+Need a reply and pause:
+
+```bash
+uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py --to human --kind decision --await-reply --message "Need decision: keep Claude support or remove it."
+```
+
+Multi-line from stdin:
 
 ```bash
 cat /tmp/message.txt | uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py --kind blocker --await-reply
@@ -36,21 +49,42 @@ cat /tmp/message.txt | uv run python ${CLAUDE_SKILL_DIR}/scripts/send_mailbox.py
 
 ## mailbox-read
 
-Read latest unread human messages (default; tracked by last-read state):
+Read unread human messages (default):
 
 ```bash
 uv run python ${CLAUDE_SKILL_DIR}/scripts/read_mailbox.py
 ```
 
-Read latest N human messages:
+Read unread messages from a specific agent:
 
 ```bash
-uv run python ${CLAUDE_SKILL_DIR}/scripts/read_mailbox.py 5
+uv run python ${CLAUDE_SKILL_DIR}/scripts/read_mailbox.py --from jarvis
+```
+
+Read latest N messages from a contact:
+
+```bash
+uv run python ${CLAUDE_SKILL_DIR}/scripts/read_mailbox.py --from jarvis 5
+```
+
+Get unread summary across all contacts:
+
+```bash
+uv run python ${CLAUDE_SKILL_DIR}/scripts/read_mailbox.py --summary
+```
+
+## mailbox-contacts
+
+List all contacts:
+
+```bash
+uv run python ${CLAUDE_SKILL_DIR}/scripts/contacts.py
 ```
 
 ## Rules
 
 - Prefer skill scripts over manual JSONL edits.
-- Keep agent-authored mailbox messages concise and decision-oriented.
-- Use `--await-reply` only when you truly need to pause until a human answers.
-- `mailbox-read` stores last-read state at `Runtime/mailbox_read_human_last_id`.
+- Keep messages concise and decision-oriented.
+- Use `--await-reply` only when you truly need to pause until a reply arrives.
+- `--broadcast` and `--await-reply` cannot be used together.
+- Contacts are managed by human via the platform frontend; do not attempt to create or remove contacts.

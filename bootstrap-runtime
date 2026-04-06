@@ -233,7 +233,6 @@ ensure_template_sources() {
     "episodes-README.md.tmpl"
     "tool-notes-README.md.tmpl"
     "mailbox-README.md.tmpl"
-    "MAILBOX.jsonl.tmpl"
     "mailbox_io.py.tmpl"
     "mailbox_feishu_bridge.py.tmpl"
     "web_ui_server.py.tmpl"
@@ -243,6 +242,7 @@ ensure_template_sources() {
     "skills/mailbox-operate/SKILL.md.tmpl"
     "skills/mailbox-operate/scripts/send_mailbox.py.tmpl"
     "skills/mailbox-operate/scripts/read_mailbox.py.tmpl"
+    "skills/mailbox-operate/scripts/contacts.py.tmpl"
   )
 
   local provider_required=()
@@ -299,7 +299,9 @@ scaffold_workspace() {
   mkdir -p "${WORKDIR}/Memory/episodes"
   mkdir -p "${WORKDIR}/tool-notes"
   mkdir -p "${WORKDIR}/mailbox"
-  mkdir -p "${WORKDIR}/Runtime"
+  mkdir -p "${WORKDIR}/Runtime/pending_messages"
+  mkdir -p "${WORKDIR}/Runtime/awaiting_reply"
+  mkdir -p "${WORKDIR}/Runtime/mailbox_read_last_id"
   mkdir -p "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts"
   mkdir -p "${WORKDIR}/${provider_skill_dir}/agents"
 
@@ -334,9 +336,20 @@ scaffold_workspace() {
     "${WORKDIR}/mailbox/README.md" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
-  render_template "${SHARED_TEMPLATE_DIR}/MAILBOX.jsonl.tmpl" \
-    "${WORKDIR}/mailbox/MAILBOX.jsonl" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+  # Initialize contacts.json with human as default contact
+  cat > "${WORKDIR}/mailbox/contacts.json" <<EOF_CONTACTS
+{
+  "human": {
+    "type": "human",
+    "mailbox_file": "human.jsonl",
+    "connected_at": "${created_at}"
+  }
+}
+EOF_CONTACTS
+
+  # Initialize human.jsonl with system init message
+  echo "{\"id\":\"mail.${created_date}.000\",\"ts\":\"${created_at}\",\"from\":\"human\",\"to\":\"${agent_name}\",\"task_id\":\"task.system.init\",\"message\":\"${agent_name} initialized. Welcome. Read ${rules_filename} for your behavioral rules and begin working.\"}" \
+    > "${WORKDIR}/mailbox/human.jsonl"
 
   render_template "${SHARED_TEMPLATE_DIR}/mailbox_io.py.tmpl" \
     "${WORKDIR}/mailbox_io.py" \
@@ -372,6 +385,10 @@ scaffold_workspace() {
 
   render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
     "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/contacts.py.tmpl" \
+    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/contacts.py" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
   if [[ "${PROVIDER}" == "codex" ]]; then
@@ -416,6 +433,7 @@ scaffold_workspace() {
   chmod +x "${WORKDIR}/status-agent.sh"
   chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py"
   chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py"
+  chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/contacts.py"
 
   if [[ "${PROVIDER}" == "codex" ]]; then
     chmod +x "${WORKDIR}/run_codex.mjs"
@@ -430,7 +448,7 @@ is_shared_workspace_layout() {
   local dir="$1"
 
   [[ -d "${dir}/mailbox" ]] &&
-  [[ -f "${dir}/mailbox/MAILBOX.jsonl" ]] &&
+  [[ -f "${dir}/mailbox/contacts.json" ]] &&
   [[ -f "${dir}/mailbox_io.py" ]] &&
   [[ -f "${dir}/mailbox_feishu_bridge.py" ]] &&
   [[ -f "${dir}/web_ui_server.py" ]] &&
@@ -536,12 +554,15 @@ root = Path(os.environ["WORKDIR"])
 first_instruction = os.environ["FIRST_INSTRUCTION"].strip()
 
 sys.path.insert(0, str(root))
-from mailbox_io import append_message, read_messages
+from mailbox_io import append_message, read_messages, load_contacts
 
-mailbox_path = root / "mailbox" / "MAILBOX.jsonl"
+mailbox_path = root / "mailbox" / "human.jsonl"
+contacts = load_contacts(root / "mailbox" / "contacts.json")
+agent_name = contacts.get("human", {}).get("mailbox_file", "human.jsonl").replace(".jsonl", "")
+
 messages = read_messages(mailbox_path)
 has_user_goal = any(
-    msg.get("role") == "human" and msg.get("task_id") != "task.system.init"
+    msg.get("from") == "human" and msg.get("task_id") != "task.system.init"
     for msg in messages
 )
 
@@ -550,7 +571,8 @@ if has_user_goal:
 else:
     append_message(
         mailbox_path,
-        role="human",
+        from_id="human",
+        to_id="agent",
         task_id="task.user.initial_instruction",
         message=first_instruction,
     )

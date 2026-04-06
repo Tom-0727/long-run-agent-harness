@@ -23,7 +23,9 @@ You persist knowledge, record episodes, make skills and communicate with humans 
     skills/                   # Auto-discovered skills
   tool-notes/                 # One file per non-native external tool
   mailbox/
-    MAILBOX.jsonl             # Human-agent shared mailbox (append-only)
+    contacts.json             # Contact list (human + connected agents)
+    human.jsonl               # Messages with human (append-only)
+    agent.<name>.jsonl        # Messages with a connected agent (append-only)
   Memory/
     knowledge/                # Distilled long-term knowledge
       factual/
