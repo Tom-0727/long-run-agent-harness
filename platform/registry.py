@@ -177,9 +177,11 @@ def read_agent_status(workdir: str) -> dict:
     if state == "running" and not runner_alive:
         state = "stale"
 
-    # Last mailbox message
+    # Last mailbox message (check human.jsonl first, fall back to MAILBOX.jsonl for migration)
     last_message = ""
-    mailbox_file = workdir_path / "mailbox" / "MAILBOX.jsonl"
+    mailbox_file = workdir_path / "mailbox" / "human.jsonl"
+    if not mailbox_file.exists():
+        mailbox_file = workdir_path / "mailbox" / "MAILBOX.jsonl"
     if mailbox_file.exists():
         lines = mailbox_file.read_text(encoding="utf-8").strip().splitlines()
         for line in reversed(lines):
@@ -193,12 +195,19 @@ def read_agent_status(workdir: str) -> dict:
             except json.JSONDecodeError:
                 continue
 
+    # Check awaiting state
+    awaiting_reply_dir = runtime_dir / "awaiting_reply"
+    has_awaiting = awaiting_reply_dir.is_dir() and any(awaiting_reply_dir.iterdir()) if awaiting_reply_dir.is_dir() else False
+    # Backward compat
+    if not has_awaiting:
+        has_awaiting = (runtime_dir / "awaiting_human").exists()
+
     return {
         "state": state,
         "runner_pid": int(runner_pid) if runner_pid.isdigit() else None,
         "runner_alive": runner_alive,
         "last_heartbeat": _format_ts(_read(runtime_dir / "last_heartbeat")),
-        "awaiting_human": (runtime_dir / "awaiting_human").exists(),
+        "awaiting_human": has_awaiting,
         "last_message": last_message,
     }
 

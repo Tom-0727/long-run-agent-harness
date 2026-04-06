@@ -1,47 +1,39 @@
 # mailbox/
 
-Human-agent communication channel for {{AGENT_NAME}}.
+Communication channel for {{AGENT_NAME}} — supports human and inter-agent messaging.
 
-**You MUST read this file before writing to MAILBOX.jsonl.**
+**You MUST read this file before operating the mailbox.**
 
-## Purpose
+## Structure
 
-`MAILBOX.jsonl` is the sole communication interface between human and agent.
+- `contacts.json` — contact list (human + connected agents)
+- `human.jsonl` — messages with human
+- `agent.<name>.jsonl` — messages with a specific agent
 
-Uses:
-- Agent progress updates
-- Agent requests for human help
-- Human replies, decisions, and instructions
+Each .jsonl file is append-only. Each line is a JSON object.
 
-If `mailbox_feishu_bridge.py` is running, agent-authored mailbox entries are forwarded to Feishu and inbound Feishu replies are appended back into this file as `role: human`.
-
-## Format
-
-`MAILBOX.jsonl` — each line is a JSON object.
+## Message Schema
 
 Required fields:
-- `id`: unique message identifier (format: `mail.<YYYYMMDDTHHMMSSZ>.<seq>`)
+- `id`: unique identifier (format: `mail.<YYYYMMDDTHHMMSSZ>.<seq>`)
 - `ts`: ISO 8601 timestamp
-- `role`: `agent | human`
+- `from`: sender name (human, or agent name)
+- `to`: recipient name
 - `task_id`: associated task identifier
 - `message`: the content
 
 Optional fields:
 - `kind`: `update | question | decision | blocker`
-- `await_reply`: whether the sender expects the runtime to pause for a human reply
-
-Example:
-
-```json
-{"id":"mail.20260321T101500Z.001","ts":"2026-03-21T10:15:00Z","role":"agent","task_id":"task.market-research.scope","message":"Need decision: optimize for CN only or APAC?"}
-```
+- `await_reply`: whether the sender expects the runtime to pause for a reply
 
 ## Operating Rules
 
 - **Append-only** — never modify or delete old messages
-- You **must** read new mailbox entries at every heartbeat wakeup
-- If you are waiting for human input (`awaiting_human = true`) and no new human message exists, do not continue the blocked task
-- When you need human input, write a message with `role: agent` and clearly state what decision or information you need
-- If `mailbox-operate` skill scripts exist, use `mailbox-send` for agent-authored writes and `mailbox-read` for reads instead of manually editing `MAILBOX.jsonl`
-- If you need to pause until a human answers, use `mailbox-send --await-reply` instead of touching runtime state files directly
-- `mailbox-read` without arguments returns unread human messages and records the latest read id in `Runtime/mailbox_read_human_last_id`
+- Read new messages at every heartbeat wakeup using `mailbox-read --summary` first
+- Use skill scripts (`mailbox-send`, `mailbox-read`, `contacts.py`) instead of manual JSONL edits
+- To send to human (default): `mailbox-send --message "..."`
+- To send to another agent: `mailbox-send --to <name> --message "..."`
+- To broadcast to all agents: `mailbox-send --broadcast --message "..."`
+- To read from a specific contact: `mailbox-read --from <name>`
+- To pause until a reply: `mailbox-send --await-reply --message "..."`
+- Contacts are managed by human via the platform — do not attempt to create or remove contacts

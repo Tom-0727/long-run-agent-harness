@@ -22,9 +22,8 @@ const STATE_FILE = path.join(RUNTIME_DIR, "state");
 const PROVIDER_FILE = path.join(RUNTIME_DIR, "runtime_provider");
 const THREAD_FILE = path.join(RUNTIME_DIR, "codex_thread_id");
 const EVENTS_FILE = path.join(RUNTIME_DIR, "codex_events.jsonl");
-const MAILBOX = path.join(AGENT_DIR, "mailbox", "MAILBOX.jsonl");
-const AWAITING_FILE = path.join(RUNTIME_DIR, "awaiting_human");
-const PENDING_HUMAN_FILE = path.join(RUNTIME_DIR, "pending_human.json");
+const PENDING_MESSAGES_DIR = path.join(RUNTIME_DIR, "pending_messages");
+const AWAITING_REPLY_DIR = path.join(RUNTIME_DIR, "awaiting_reply");
 const INTERVAL_FILE = path.join(RUNTIME_DIR, "interval");
 const WORK_SCHEDULE_FILE = path.join(RUNTIME_DIR, "work_schedule.json");
 
@@ -258,81 +257,108 @@ function saveThreadId(threadId) {
   writeText(THREAD_FILE, threadId);
 }
 
-function hasNewHumanMessages() {
-  if (!fileExists(MAILBOX)) {
+function hasAnyPending() {
+  try {
+    const entries = fs.readdirSync(PENDING_MESSAGES_DIR);
+    return entries.some((e) => e.endsWith(".json"));
+  } catch {
     return false;
   }
+}
 
-  let lastAgentLine = -1;
-  let lastHumanLine = -1;
-  const lines = readText(MAILBOX).split(/\r?\n/);
+function hasAnyAwaiting() {
+  try {
+    const entries = fs.readdirSync(AWAITING_REPLY_DIR);
+    return entries.length > 0;
+  } catch {
+    return false;
+  }
+}
 
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
+function loadPendingMessages() {
+  const result = {};
+  try {
+    for (const entry of fs.readdirSync(PENDING_MESSAGES_DIR)) {
+      if (!entry.endsWith(".json")) continue;
+      const filePath = path.join(PENDING_MESSAGES_DIR, entry);
+      try {
+        const data = JSON.parse(readText(filePath));
+        if (data && typeof data === "object") {
+          result[entry.replace(/\.json$/, "")] = data;
+        }
+      } catch { /* skip malformed */ }
     }
+  } catch { /* dir missing */ }
+  return result;
+}
+
+function collectPendingSnapshot() {
+  const pending = loadPendingMessages();
+  const snapshot = {};
+  for (const [contact, data] of Object.entries(pending)) {
+    snapshot[contact] = data.mailbox_id || "";
+  }
+  return snapshot;
+}
+
+function clearUnchangedPending(snapshot) {
+  for (const [contact, expectedId] of Object.entries(snapshot)) {
+    if (!expectedId) continue;
+    const filePath = path.join(PENDING_MESSAGES_DIR, `${contact}.json`);
     try {
-      const message = JSON.parse(trimmed);
-      if (message.role === "agent") {
-        lastAgentLine = index;
-      } else if (message.role === "human") {
-        lastHumanLine = index;
+      const data = JSON.parse(readText(filePath));
+      if (data?.mailbox_id === expectedId) {
+        removeFile(filePath);
       }
-    } catch {
-      // Ignore malformed mailbox lines.
+    } catch { /* skip */ }
+  }
+}
+
+function clearAwaitingForPending() {
+  try {
+    const pendingEntries = fs.readdirSync(PENDING_MESSAGES_DIR).filter((e) => e.endsWith(".json"));
+    for (const entry of pendingEntries) {
+      const contact = entry.replace(/\.json$/, "");
+      const awaitingFile = path.join(AWAITING_REPLY_DIR, contact);
+      if (fs.existsSync(awaitingFile)) {
+        fs.unlinkSync(awaitingFile);
+        log(`Cleared awaiting_reply/${contact} (reply received).`);
+      }
     }
-  });
+  } catch { /* dirs missing */ }
+}
 
-  if (lastHumanLine < 0) {
-    return false;
-  }
-  if (lastAgentLine < 0) {
+function checkAwaitingReply() {
+  if (hasAnyAwaiting() && !hasAnyPending()) {
+    log("Awaiting reply. No pending messages. Skipping heartbeat.");
     return true;
   }
-  return lastHumanLine > lastAgentLine;
-}
-
-function loadPendingHuman() {
-  const data = loadJsonFile(PENDING_HUMAN_FILE);
-  return data && typeof data === "object" ? data : null;
-}
-
-function clearPendingHumanIfUnchanged(expectedMailboxId) {
-  if (!expectedMailboxId || !fileExists(PENDING_HUMAN_FILE)) {
-    return;
-  }
-
-  const current = loadPendingHuman();
-  if (current?.mailbox_id === expectedMailboxId) {
-    removeFile(PENDING_HUMAN_FILE);
-  }
-}
-
-function checkAwaitingHuman() {
-  if (!fileExists(AWAITING_FILE)) {
-    return false;
-  }
-
-  if (!loadPendingHuman() && !hasNewHumanMessages()) {
-    log("Awaiting human response. Skipping heartbeat.");
-    return true;
-  }
-
-  removeFile(AWAITING_FILE);
   return false;
+}
+
+function buildMailboxStatus() {
+  const parts = [];
+  const pending = loadPendingMessages();
+  const pendingEntries = Object.entries(pending);
+  if (pendingEntries.length > 0) {
+    const items = pendingEntries.map(([c, d]) => `  - ${c} (mailbox_id: ${d.mailbox_id || "?"})`);
+    parts.push("New messages from:\n" + items.join("\n"));
+  }
+  try {
+    const awaiting = fs.readdirSync(AWAITING_REPLY_DIR);
+    if (awaiting.length > 0) {
+      parts.push("Currently awaiting reply from: " + awaiting.join(", "));
+    }
+  } catch { /* dir missing */ }
+  return parts.join("\n");
 }
 
 async function sleepWithWakeup(minutes) {
   const totalSeconds = Math.max(0, minutes * 60);
 
   for (let slept = 0; slept < totalSeconds && !shutdownRequested; slept += 1) {
-    if (loadPendingHuman()) {
-      log("Pending human mailbox message detected. Waking immediately.");
-      return;
-    }
-    if (fileExists(AWAITING_FILE) && hasNewHumanMessages()) {
-      log("New human mailbox message detected while awaiting input. Waking immediately.");
+    if (hasAnyPending()) {
+      log("Pending mailbox message detected. Waking immediately.");
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -448,12 +474,8 @@ async function sleepUntilWorkWindow(schedule) {
   log(`Off hours. Sleeping ${Math.floor(waitSeconds / 60)} minutes until next work window.`);
 
   for (let slept = 0; slept < waitSeconds && !shutdownRequested; slept += 1) {
-    if (loadPendingHuman()) {
-      log("Human message received during off hours. Waking immediately.");
-      return;
-    }
-    if (fileExists(AWAITING_FILE) && hasNewHumanMessages()) {
-      log("New human message during off hours. Waking immediately.");
+    if (hasAnyPending()) {
+      log("Message received during off hours. Waking immediately.");
       return;
     }
     if (slept > 0 && slept % 60 === 0) {
@@ -481,18 +503,18 @@ function checkWorkSchedule() {
 
 // ─── Prompt building ───────────────────────────────────────────────
 
-function buildPrompt(firstHeartbeat, pendingHuman) {
-  if (pendingHuman) {
-    const pendingId = pendingHuman.mailbox_id || "unknown";
+function buildPrompt(firstHeartbeat, mailboxStatus) {
+  if (mailboxStatus) {
     return [
-      "New human mailbox messages have arrived.",
+      "New mailbox messages have arrived.",
       "",
-      "1. Read mailbox/MAILBOX.jsonl immediately.",
-      "2. Find and address the newest human message(s).",
-      "3. Continue the same task on the current Codex thread.",
-      "4. If you need to reply, use mailbox-operate/mailbox-send.",
+      mailboxStatus,
       "",
-      `Latest pending mailbox id: ${pendingId}`,
+      "1. Run mailbox-read --summary to see all unread contacts.",
+      "2. Read messages from contacts with unread messages using mailbox-read --from <contact>.",
+      "3. Address the messages and continue your current work.",
+      "4. To reply, use mailbox-send --to <contact> --message \"...\"",
+      "",
       `Working directory: ${AGENT_DIR}`,
     ].join("\n");
   }
@@ -503,10 +525,9 @@ function buildPrompt(firstHeartbeat, pendingHuman) {
       "",
       "Read AGENTS.md to understand your behavioral rules.",
       "Read mailbox/README.md before writing mailbox messages.",
-      "Read mailbox/MAILBOX.jsonl for initial instructions.",
-      "Use mailbox-operate/mailbox-read for reads and mailbox-operate/mailbox-send for agent-authored mailbox messages.",
-      "If you need to pause for a human reply, use mailbox-send with its await-reply option and stop.",
-      "When the human replies, the runtime will clear Runtime/awaiting_human before resuming the same Codex thread.",
+      "Run mailbox-read to read initial instructions.",
+      "Use mailbox-read for reads and mailbox-send for sending messages.",
+      "If you need to pause for a reply, use mailbox-send with --await-reply and stop.",
       "Then begin working on your assigned task.",
       "",
       `Working directory: ${AGENT_DIR}`,
@@ -516,9 +537,9 @@ function buildPrompt(firstHeartbeat, pendingHuman) {
   return [
     "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime.",
     "",
-    "1. Read mailbox updates with mailbox-operate/mailbox-read.",
-    "2. If blocked on a human reply, use mailbox-send with its await-reply option and stop.",
-    "3. Use mailbox-operate/mailbox-send for agent-authored mailbox messages.",
+    "1. Check mailbox: mailbox-read --summary",
+    "2. Read and address any unread messages.",
+    "3. If blocked on a reply, use mailbox-send with --await-reply and stop.",
     "4. Otherwise continue your current work on the same Codex thread.",
     "",
     `Working directory: ${AGENT_DIR}`,
@@ -677,15 +698,17 @@ async function main() {
       writeText(STATE_FILE, "running");
       log("Heartbeat - starting");
 
-      if (checkAwaitingHuman()) {
+      clearAwaitingForPending();
+
+      if (checkAwaitingReply()) {
         log(`Sleeping ${interval} minutes...`);
         await sleepWithWakeup(interval);
         continue;
       }
 
-      const pendingHuman = loadPendingHuman();
-      const pendingBefore = pendingHuman?.mailbox_id || null;
-      const prompt = buildPrompt(firstHeartbeat, pendingHuman);
+      const mailboxStatus = buildMailboxStatus();
+      const pendingSnapshot = collectPendingSnapshot();
+      const prompt = buildPrompt(firstHeartbeat, mailboxStatus);
 
       try {
         await invokeAgent(prompt, args);
@@ -698,13 +721,13 @@ async function main() {
           appendEvent("runtime_error", { message });
         }
       } finally {
-        clearPendingHumanIfUnchanged(pendingBefore);
+        clearUnchangedPending(pendingSnapshot);
       }
 
       firstHeartbeat = false;
 
-      if (loadPendingHuman()) {
-        log("More human mailbox messages are pending. Continuing immediately.");
+      if (hasAnyPending()) {
+        log("More mailbox messages are pending. Continuing immediately.");
         continue;
       }
 

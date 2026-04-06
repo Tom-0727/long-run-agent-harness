@@ -27,18 +27,20 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, AssistantMessage
 
 AGENT_DIR = Path(__file__).resolve().parent
 RUNTIME_DIR = AGENT_DIR / "Runtime"
-MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
 PID_FILE = RUNTIME_DIR / "pid"
 HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
 STATE_FILE = RUNTIME_DIR / "state"
 PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
 SESSION_FILE = RUNTIME_DIR / "claude_session_id"
 LEGACY_SESSION_FILE = RUNTIME_DIR / "session_id"
-AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
-PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
+PENDING_MESSAGES_DIR = RUNTIME_DIR / "pending_messages"
+AWAITING_REPLY_DIR = RUNTIME_DIR / "awaiting_reply"
 RATELIMIT_FILE = RUNTIME_DIR / "ratelimit.json"
 INTERVAL_FILE = RUNTIME_DIR / "interval"
 WORK_SCHEDULE_FILE = RUNTIME_DIR / "work_schedule.json"
+
+sys.path.insert(0, str(AGENT_DIR))
+from mailbox_io import load_pending_messages, clear_pending_message
 
 # ─── Globals ──────────────────────────────────────────────────────────
 
@@ -102,42 +104,68 @@ def cleanup_pid():
 
 # ─── Mailbox helpers ─────────────────────────────────────────────────
 
-def has_new_human_messages() -> bool:
-    if not MAILBOX.exists():
+def has_any_pending() -> bool:
+    """Check if any pending message files exist."""
+    if not PENDING_MESSAGES_DIR.is_dir():
         return False
+    return any(PENDING_MESSAGES_DIR.glob("*.json"))
 
-    last_agent_line = -1
-    last_human_line = -1
 
-    for i, line in enumerate(MAILBOX.read_text().splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if msg.get("role") == "agent":
-            last_agent_line = i
-        elif msg.get("role") == "human":
-            last_human_line = i
-
-    if last_human_line < 0:
+def has_any_awaiting() -> bool:
+    """Check if any awaiting_reply files exist."""
+    if not AWAITING_REPLY_DIR.is_dir():
         return False
-    if last_agent_line < 0:
+    return any(AWAITING_REPLY_DIR.iterdir())
+
+
+def clear_awaiting_for_pending() -> None:
+    """Clear awaiting_reply entries for contacts that have pending messages (reply received)."""
+    if not AWAITING_REPLY_DIR.is_dir() or not PENDING_MESSAGES_DIR.is_dir():
+        return
+    for pending_file in PENDING_MESSAGES_DIR.glob("*.json"):
+        contact = pending_file.stem  # e.g. "human" from "human.json"
+        awaiting_file = AWAITING_REPLY_DIR / contact
+        if awaiting_file.exists():
+            awaiting_file.unlink()
+            log(f"Cleared awaiting_reply/{contact} (reply received).")
+
+
+def check_awaiting_reply() -> bool:
+    """Return True if we should skip this heartbeat (waiting for reply, no new messages)."""
+    if has_any_awaiting() and not has_any_pending():
+        log("Awaiting reply. No pending messages. Skipping heartbeat.")
         return True
-    return last_human_line > last_agent_line
-
-
-def check_awaiting_human() -> bool:
-    """Return True if we should skip this heartbeat (waiting for human)."""
-    if AWAITING_FILE.exists():
-        if not load_pending_human() and not has_new_human_messages():
-            log("Awaiting human response. Skipping heartbeat.")
-            return True
-        else:
-            AWAITING_FILE.unlink(missing_ok=True)
     return False
+
+
+def collect_pending_snapshot() -> dict[str, str]:
+    """Return {contact: mailbox_id} for all current pending messages."""
+    pending = load_pending_messages(RUNTIME_DIR)
+    return {contact: data.get("mailbox_id", "") for contact, data in pending.items()}
+
+
+def clear_unchanged_pending(snapshot: dict[str, str]) -> None:
+    """Clear pending messages whose mailbox_id hasn't changed since snapshot."""
+    for contact, expected_id in snapshot.items():
+        clear_pending_message(RUNTIME_DIR, contact, expected_id)
+
+
+def build_mailbox_status() -> str:
+    """Build a status string describing pending messages and awaiting state."""
+    parts = []
+
+    pending = load_pending_messages(RUNTIME_DIR)
+    if pending:
+        items = [f"  - {contact} (mailbox_id: {data.get('mailbox_id', '?')})"
+                 for contact, data in pending.items()]
+        parts.append("New messages from:\n" + "\n".join(items))
+
+    if AWAITING_REPLY_DIR.is_dir():
+        awaiting = [f.name for f in AWAITING_REPLY_DIR.iterdir()]
+        if awaiting:
+            parts.append("Currently awaiting reply from: " + ", ".join(awaiting))
+
+    return "\n".join(parts) if parts else ""
 
 
 # ─── Session management ──────────────────────────────────────────────
@@ -156,39 +184,15 @@ def save_session_id(session_id: str):
     SESSION_FILE.write_text(session_id)
 
 
-# ─── Pending human wakeups ───────────────────────────────────────────
-
-def load_pending_human() -> dict | None:
-    if not PENDING_HUMAN_FILE.exists():
-        return None
-
-    try:
-        data = json.loads(PENDING_HUMAN_FILE.read_text())
-    except Exception:
-        return None
-
-    return data if isinstance(data, dict) else None
-
-
-def clear_pending_human_if_unchanged(expected_mailbox_id: str | None):
-    if not expected_mailbox_id or not PENDING_HUMAN_FILE.exists():
-        return
-
-    data = load_pending_human()
-    if data and data.get("mailbox_id") == expected_mailbox_id:
-        PENDING_HUMAN_FILE.unlink(missing_ok=True)
-
+# ─── Pending message wakeups ─────────────────────────────────────────
 
 async def sleep_with_wakeup(minutes: int):
     total_seconds = max(0, minutes * 60)
     slept = 0
 
     while slept < total_seconds and not shutdown_requested:
-        if load_pending_human():
-            log("Pending human mailbox message detected. Waking immediately.")
-            return
-        if AWAITING_FILE.exists() and has_new_human_messages():
-            log("New human mailbox message detected while awaiting input. Waking immediately.")
+        if has_any_pending():
+            log("Pending mailbox message detected. Waking immediately.")
             return
 
         await asyncio.sleep(1)
@@ -197,16 +201,15 @@ async def sleep_with_wakeup(minutes: int):
 
 # ─── Prompt building ─────────────────────────────────────────────────
 
-def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
-    if pending_human:
-        pending_id = pending_human.get("mailbox_id", "unknown")
+def build_prompt(first_heartbeat: bool, mailbox_status: str) -> str:
+    if mailbox_status:
         return (
-            "New human mailbox messages have arrived.\n\n"
-            "1. Read mailbox/MAILBOX.jsonl immediately.\n"
-            "2. Find and address the newest human message(s).\n"
-            "3. Continue the same task in the current session.\n"
-            "4. If you need to reply, run: uv run python .claude/skills/mailbox-operate/scripts/send_mailbox.py --kind update --message \"...\"\n\n"
-            f"Latest pending mailbox id: {pending_id}\n"
+            "New mailbox messages have arrived.\n\n"
+            f"{mailbox_status}\n\n"
+            "1. Run: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary\n"
+            "2. Read messages from contacts with unread messages using: read_mailbox.py --from <contact>\n"
+            "3. Address the messages and continue your current work.\n"
+            "4. To reply, use: send_mailbox.py --to <contact> --message \"...\"\n\n"
             f"Working directory: {AGENT_DIR}"
         )
 
@@ -214,18 +217,19 @@ def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
         return (
             "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
             "Read CLAUDE.md to understand your behavioral rules.\n"
-            "Read mailbox/MAILBOX.jsonl for any initial instructions.\n"
+            "Read your mailbox: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py\n"
             "For mailbox operations, run scripts directly via Bash (see CLAUDE.md Skills Usage section).\n"
-            "If you need to pause for a human reply, use send_mailbox.py with --await-reply.\n"
+            "If you need to pause for a reply, use send_mailbox.py with --await-reply.\n"
             "Then begin working on your assigned task.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
     else:
         return (
             "Heartbeat wakeup for {{AGENT_NAME}}.\n\n"
-            "1. Read mailbox updates: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py\n"
-            "2. If you need to pause for a human reply, use send_mailbox.py with --await-reply and stop.\n"
-            "3. Otherwise, continue your current work.\n\n"
+            "1. Check mailbox: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary\n"
+            "2. Read and address any unread messages.\n"
+            "3. If you need to pause for a reply, use send_mailbox.py with --await-reply and stop.\n"
+            "4. Otherwise, continue your current work.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
 
@@ -401,11 +405,8 @@ async def sleep_until_work_window(schedule: dict):
 
     slept = 0
     while slept < wait_seconds and not shutdown_requested:
-        if load_pending_human():
-            log("Human message received during off hours. Waking immediately.")
-            return
-        if AWAITING_FILE.exists() and has_new_human_messages():
-            log("New human message during off hours. Waking immediately.")
+        if has_any_pending():
+            log("Message received during off hours. Waking immediately.")
             return
         # Re-check schedule every 60s in case file was updated
         if slept > 0 and slept % 60 == 0:
@@ -469,28 +470,31 @@ async def main():
 
             log("Heartbeat — starting")
 
-            # Check if waiting for human
-            if check_awaiting_human():
+            # Clear awaiting state for contacts that have replied
+            clear_awaiting_for_pending()
+
+            # Check if waiting for reply with no new messages
+            if check_awaiting_reply():
                 log(f"Sleeping {interval} minutes...")
                 await sleep_with_wakeup(interval)
                 continue
 
             # Build prompt and invoke
-            pending_human = load_pending_human()
-            pending_before = pending_human.get("mailbox_id") if pending_human else None
-            prompt = build_prompt(first_heartbeat, pending_human)
+            mailbox_status = build_mailbox_status()
+            pending_snapshot = collect_pending_snapshot()
+            prompt = build_prompt(first_heartbeat, mailbox_status)
 
             try:
                 await invoke_agent(prompt, args.max_turns, args.max_budget)
             except Exception as e:
                 log(f"Runtime error: {e}")
             finally:
-                clear_pending_human_if_unchanged(pending_before)
+                clear_unchanged_pending(pending_snapshot)
 
             first_heartbeat = False
 
-            if load_pending_human():
-                log("More human mailbox messages are pending. Continuing immediately.")
+            if has_any_pending():
+                log("More mailbox messages are pending. Continuing immediately.")
                 continue
 
             interval = get_interval(args.interval)

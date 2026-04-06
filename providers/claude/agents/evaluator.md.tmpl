@@ -27,7 +27,7 @@ Output a single structured report. Be blunt — flag problems, not praise.
 - Episodes directory: `Memory/episodes/`
 - Knowledge directory: `Memory/knowledge/`
 - Skills directories: `.claude/skills/`
-- Mailbox: `mailbox/MAILBOX.jsonl`
+- Mailbox: `mailbox/human.jsonl`
 
 ---
 
@@ -42,7 +42,7 @@ evidence by reading relevant files, then render your verdict.
 
 Steps:
 1. Read `{{RULES_FILENAME}}` and extract the goal statement from Section 1.
-2. Read `mailbox/MAILBOX.jsonl` to find the latest human-assigned tasks or goal
+2. Read `mailbox/human.jsonl` to find the latest human-assigned tasks or goal
    refinements (role=human messages).
 3. Glob `Memory/episodes/**/*.md` and read the **5 most recent** episodes
    (by filename date). For each, extract: `objective`, `status`, and the

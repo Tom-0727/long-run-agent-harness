@@ -460,6 +460,22 @@
       </div>
       <div id="agentsGrid" class="agents-grid"></div>
     </section>
+
+    <!-- Agent Connections -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Agent Connections</h2>
+        <span id="connCount" class="meta"></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <select id="connAgentA" style="padding:4px 8px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px"></select>
+        <span style="color:var(--muted)">&harr;</span>
+        <select id="connAgentB" style="padding:4px 8px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px"></select>
+        <button onclick="doConnect()" style="padding:4px 10px;font-size:12px">Connect</button>
+        <span id="connResult" class="meta"></span>
+      </div>
+      <div id="connList"></div>
+    </section>
   </div>
 
   <!-- ══════════ Agent Detail View ══════════ -->
@@ -510,17 +526,29 @@
 
     <section class="panel">
       <div class="panel-head">
+        <h2>Contacts</h2>
+      </div>
+      <div id="detailContacts" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
         <h2>Mailbox History</h2>
-        <span class="meta">Latest 50 messages</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select id="historyContact" onchange="refreshDetailHistory()" style="padding:3px 6px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px">
+            <option value="human">human</option>
+          </select>
+          <span class="meta">Latest 50 messages</span>
+        </div>
       </div>
       <div id="detailHistory" class="history"></div>
     </section>
 
-    <section class="panel">
+    <section id="sendMessagePanel" class="panel">
       <h2>Send Message</h2>
       <textarea id="detailMessage" placeholder="Type message..."></textarea>
       <div class="row">
-        <button onclick="detailSend()">Send</button>
+        <button id="detailSendBtn" onclick="detailSend()">Send</button>
         <span id="detailSendResult" class="meta"></span>
       </div>
     </section>
@@ -635,10 +663,10 @@ function stateBadge(status) {
   if (!status) return { text: 'unknown', cls: 'off' };
   const s = status.state;
   if (s === 'off_hours') return { text: 'off hours', cls: 'offhours' };
+  if (s === 'stopped') return { text: 'stopped', cls: 'off' };
   if (status.awaiting_human) return { text: 'awaiting human', cls: 'wait' };
   if (s === 'running' && status.runner_alive) return { text: 'running', cls: 'on' };
   if (s === 'running') return { text: 'stale', cls: 'warn' };
-  if (s === 'stopped') return { text: 'stopped', cls: 'off' };
   return { text: s || 'unknown', cls: 'off' };
 }
 
@@ -663,8 +691,10 @@ async function refreshDashboard() {
     const agentsData = await agentsResp.json();
     const rlData = await rlResp.json();
 
-    renderAgentCards(agentsData.agents || []);
+    const agents = agentsData.agents || [];
+    renderAgentCards(agents);
     renderRateLimit(rlData);
+    refreshConnections(agents);
     document.getElementById('syncMeta').textContent = `Last sync ${nowText()}`;
   } catch (err) {
     document.getElementById('syncMeta').textContent = 'Sync failed';
@@ -808,16 +838,40 @@ function renderRateLimit(data) {
 // ── Detail Page ──
 async function refreshDetail() {
   if (!currentAgent) return;
+  const contact = document.getElementById('historyContact').value || 'human';
   try {
-    const [statusResp, historyResp] = await Promise.all([
+    const [statusResp, historyResp, contactsResp] = await Promise.all([
       fetch(`/api/agents/${encodeURIComponent(currentAgent)}/status`),
-      fetch(`/api/agents/${encodeURIComponent(currentAgent)}/history?limit=50`),
+      fetch(`/api/agents/${encodeURIComponent(currentAgent)}/history?limit=50&contact=${encodeURIComponent(contact)}`),
+      fetch(`/api/agents/${encodeURIComponent(currentAgent)}/contacts`),
     ]);
     const statusData = await statusResp.json();
     const historyData = await historyResp.json();
+    const contactsData = await contactsResp.json();
 
     renderDetailStatus(statusData);
     renderDetailHistory(historyData.messages || []);
+
+    // Update contacts display and selector
+    const contacts = contactsData.contacts || [];
+    const container = document.getElementById('detailContacts');
+    container.innerHTML = '';
+    const select = document.getElementById('historyContact');
+    const currentVal = select.value;
+    select.innerHTML = '';
+    for (const c of contacts) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = `${c.name} (${c.type})`;
+      container.appendChild(tag);
+
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      select.appendChild(opt);
+    }
+    select.value = contacts.some(c => c.name === currentVal) ? currentVal : 'human';
+    updateSendPanel();
   } catch (err) { /* ignore */ }
 }
 
@@ -867,13 +921,14 @@ function renderDetailHistory(messages) {
 
   root.innerHTML = '';
   for (const item of messages) {
-    const isHuman = item.role === 'human';
+    const sender = item.from || item.role || '';
+    const isHuman = sender === 'human';
     const wrap = document.createElement('div');
     wrap.className = `msg ${isHuman ? 'human' : 'agent'}`;
 
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
-    meta.textContent = `${item.ts} · ${item.role} · ${item.task_id}`;
+    meta.textContent = `${item.ts} · ${sender}${item.to ? ' → ' + item.to : ''} · ${item.task_id}`;
     wrap.appendChild(meta);
 
     const bubble = document.createElement('div');
@@ -887,6 +942,55 @@ function renderDetailHistory(messages) {
   if (shouldStick) {
     root.scrollTop = root.scrollHeight;
   }
+}
+
+function updateSendPanel() {
+  const contact = document.getElementById('historyContact').value;
+  const isHuman = (contact === 'human');
+  const panel = document.getElementById('sendMessagePanel');
+  const textarea = document.getElementById('detailMessage');
+  const btn = document.getElementById('detailSendBtn');
+  textarea.disabled = !isHuman;
+  btn.disabled = !isHuman;
+  panel.style.opacity = isHuman ? '1' : '0.5';
+  textarea.placeholder = isHuman ? 'Type message...' : 'Cannot send messages to agent-to-agent conversations';
+}
+
+async function refreshDetailHistory() {
+  if (!currentAgent) return;
+  const contact = document.getElementById('historyContact').value;
+  updateSendPanel();
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/history?limit=50&contact=${encodeURIComponent(contact)}`);
+    const data = await resp.json();
+    renderDetailHistory(data.messages || []);
+  } catch (err) { /* ignore */ }
+}
+
+async function loadContacts() {
+  if (!currentAgent) return;
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/contacts`);
+    const data = await resp.json();
+    const contacts = data.contacts || [];
+    const container = document.getElementById('detailContacts');
+    container.innerHTML = '';
+    const select = document.getElementById('historyContact');
+    const currentVal = select.value;
+    select.innerHTML = '';
+    for (const c of contacts) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = `${c.name} (${c.type})`;
+      container.appendChild(tag);
+
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      select.appendChild(opt);
+    }
+    select.value = contacts.some(c => c.name === currentVal) ? currentVal : 'human';
+  } catch (err) { /* ignore */ }
 }
 
 // ── Work Schedule ──
@@ -1184,6 +1288,82 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+// ── Connections ──
+async function refreshConnections(agents) {
+  const selA = document.getElementById('connAgentA');
+  const selB = document.getElementById('connAgentB');
+  const prevA = selA.value;
+  const prevB = selB.value;
+  const names = agents.map(a => a.name);
+
+  selA.innerHTML = names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  selB.innerHTML = names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if (prevA && names.includes(prevA)) selA.value = prevA;
+  if (prevB && names.includes(prevB)) selB.value = prevB;
+  else if (names.length > 1) selB.selectedIndex = 1;
+
+  // Collect all connections
+  const connections = new Map();
+  for (const agent of agents) {
+    try {
+      const resp = await fetch(`/api/agents/${encodeURIComponent(agent.name)}/contacts`);
+      const data = await resp.json();
+      for (const c of (data.contacts || [])) {
+        if (c.type !== 'agent') continue;
+        const key = [agent.name, c.name].sort().join(' <-> ');
+        if (!connections.has(key)) {
+          connections.set(key, { a: [agent.name, c.name].sort()[0], b: [agent.name, c.name].sort()[1] });
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  const list = document.getElementById('connList');
+  list.innerHTML = '';
+  document.getElementById('connCount').textContent = `${connections.size} connections`;
+
+  for (const [key, { a, b }] of connections) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px';
+    row.innerHTML = `
+      <span>${esc(a)} &harr; ${esc(b)}</span>
+      <button onclick="doDisconnect('${esc(a)}','${esc(b)}')" style="padding:2px 8px;font-size:11px" class="warn">Disconnect</button>
+    `;
+    list.appendChild(row);
+  }
+}
+
+async function doConnect() {
+  const a = document.getElementById('connAgentA').value;
+  const b = document.getElementById('connAgentB').value;
+  const result = document.getElementById('connResult');
+  if (!a || !b || a === b) { result.textContent = 'Select two different agents'; return; }
+  result.textContent = 'Connecting...';
+  try {
+    const resp = await fetch('/api/mailbox/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_a: a, agent_b: b }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { result.textContent = 'Error: ' + (data.error || 'failed'); return; }
+    result.textContent = 'Connected';
+    setTimeout(() => { result.textContent = ''; refreshDashboard(); }, 1000);
+  } catch (err) { result.textContent = 'Failed'; }
+}
+
+async function doDisconnect(a, b) {
+  if (!confirm(`Disconnect ${a} and ${b}?`)) return;
+  try {
+    const resp = await fetch('/api/mailbox/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_a: a, agent_b: b }),
+    });
+    if (resp.ok) refreshDashboard();
+  } catch { /* ignore */ }
 }
 
 // ── Init ──
