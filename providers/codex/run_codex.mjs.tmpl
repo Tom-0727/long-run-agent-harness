@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { Codex } from "@openai/codex-sdk";
@@ -551,54 +552,175 @@ function buildBootstrapNoticeLines(phase) {
   ];
 }
 
+// ─── Todo / Scheduled Task wake-up sections ────────────────────────
+
+function safeJsonList(filePath) {
+  // Read filePath as a JSON array. Return [] on any error or if not an array.
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadDueRemindersSection(agentWorkdir = AGENT_DIR) {
+  // Render 'Due reminders this minute:' from Runtime/due_reminders.json.
+  // Cross-references scheduled_tasks.json so titles/subtasks appear — raw
+  // ids alone are not useful to an LLM reader. Returns "" when there are
+  // no due ids.
+  const dueIds = safeJsonList(path.join(agentWorkdir, "Runtime", "due_reminders.json"));
+  if (dueIds.length === 0) {
+    return "";
+  }
+  const tasks = safeJsonList(path.join(agentWorkdir, "scheduled_tasks.json"));
+  const byId = new Map();
+  for (const t of tasks) {
+    if (t && typeof t === "object" && t.id) {
+      byId.set(t.id, t);
+    }
+  }
+
+  const lines = ["Due reminders this minute:"];
+  for (const taskId of dueIds) {
+    const task = byId.get(taskId);
+    if (!task) {
+      lines.push(`  - ${taskId} (scheduled task record missing)`);
+      continue;
+    }
+    const title = task.title || "";
+    lines.push(`  - ${title} [${taskId}]`);
+    const desc = ((task.description || "") + "").trim();
+    if (desc) {
+      lines.push(`      ${desc}`);
+    }
+    for (const sub of task.subtasks || []) {
+      if (!sub || typeof sub !== "object") continue;
+      const text = ((sub.text || "") + "").trim();
+      if (text) {
+        lines.push(`      • ${text}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+function loadTodoSection(agentWorkdir = AGENT_DIR, today = new Date()) {
+  // Render 'Today's Todos:' from todo_list/<YYYYMM>/<DD>.json. Mirrors
+  // fetch_today.py's default-today behaviour — today is taken from local
+  // time (new Date() with getFullYear/getMonth/getDate) so it matches
+  // the Python _load_todo_section which uses datetime.now().
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, "0");
+  const d = String(today.getDate()).padStart(2, "0");
+  const dayPath = path.join(agentWorkdir, "todo_list", `${y}${m}`, `${d}.json`);
+  const todos = safeJsonList(dayPath);
+  if (todos.length === 0) {
+    return "";
+  }
+
+  const lines = ["Today's Todos:"];
+  for (const todo of todos) {
+    if (!todo || typeof todo !== "object") continue;
+    const mark = todo.done ? "x" : " ";
+    const title = todo.title || "";
+    const todoId = todo.id || "";
+    lines.push(`  - [${mark}] ${title} [${todoId}]`);
+    const desc = ((todo.description || "") + "").trim();
+    if (desc) {
+      lines.push(`      ${desc}`);
+    }
+    for (const sub of todo.subtasks || []) {
+      if (!sub || typeof sub !== "object") continue;
+      const subMark = sub.done ? "x" : " ";
+      const text = ((sub.text || "") + "").trim();
+      if (text) {
+        lines.push(`      • [${subMark}] ${text}`);
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
+function runPreHeartbeatHook(agentWorkdir = AGENT_DIR) {
+  // Invoke the todo skill's pre-heartbeat hook before composing the prompt.
+  // Never throws — a hook failure must not take the heartbeat down.
+  const hook = path.join(agentWorkdir, ".agents/skills/todo/scripts/pre_heartbeat.py");
+  if (!fs.existsSync(hook)) {
+    return;
+  }
+  try {
+    spawnSync("uv", ["run", "python", hook, "--agent-workdir", agentWorkdir], {
+      stdio: "ignore",
+      timeout: 15000,
+    });
+  } catch (err) {
+    log(`pre_heartbeat hook failed: ${err?.message || err}`);
+  }
+}
+
 // ─── Prompt building ───────────────────────────────────────────────
 
-function buildPrompt(firstHeartbeat, mailboxStatus) {
+function buildPrompt(firstHeartbeat, mailboxStatus, agentWorkdir = AGENT_DIR) {
   const bootstrapPhase = readBootstrapPhase();
   const bootstrapLines = buildBootstrapNoticeLines(bootstrapPhase);
+  const bootstrapNotice = bootstrapLines.length
+    ? bootstrapLines.join("\n").replace(/\s+$/, "")
+    : "";
+  const dueSection = loadDueRemindersSection(agentWorkdir);
+  const todoSection = loadTodoSection(agentWorkdir);
+
+  function compose(body) {
+    const parts = [
+      bootstrapNotice,
+      dueSection,
+      todoSection,
+      body.replace(/\s+$/, ""),
+      `Working directory: ${agentWorkdir}`,
+    ];
+    return parts.filter((p) => p).join("\n\n");
+  }
 
   if (mailboxStatus) {
-    return [
-      ...bootstrapLines,
-      "New mailbox messages have arrived.",
-      "",
-      mailboxStatus,
-      "",
-      "1. Run mailbox-read --summary to see all unread contacts.",
-      "2. Read messages from contacts with unread messages using mailbox-read --from <contact>.",
-      "3. Address the messages and continue your current work.",
-      "4. To reply, use mailbox-send --to <contact> --message \"...\"",
-      "",
-      `Working directory: ${AGENT_DIR}`,
-    ].join("\n");
+    return compose(
+      [
+        "New mailbox messages have arrived.",
+        "",
+        mailboxStatus,
+        "",
+        "1. Run mailbox-read --summary to see all unread contacts.",
+        "2. Read messages from contacts with unread messages using mailbox-read --from <contact>.",
+        "3. Address the messages and continue your current work.",
+        "4. To reply, use mailbox-send --to <contact> --message \"...\"",
+      ].join("\n"),
+    );
   }
 
   if (firstHeartbeat) {
-    return [
-      ...bootstrapLines,
-      "You are {{AGENT_NAME}}. This is your first heartbeat on the Codex runtime.",
-      "",
-      "Read AGENTS.md to understand your behavioral rules, including the " +
-        "Bootstrap Protocol that gates your first phases of work.",
-      "Read mailbox/{{RULES_FILENAME}} before writing mailbox messages.",
-      "Run mailbox-read to read initial instructions.",
-      "Use mailbox-read for reads and mailbox-send for sending messages.",
-      "If you need to pause for a reply, use mailbox-send with --await-reply and stop.",
-      "Then begin working on your assigned task.",
-      "",
-      `Working directory: ${AGENT_DIR}`,
-    ].join("\n");
+    return compose(
+      [
+        "You are {{AGENT_NAME}}. This is your first heartbeat on the Codex runtime.",
+        "",
+        "Read AGENTS.md to understand your behavioral rules, including the " +
+          "Bootstrap Protocol that gates your first phases of work.",
+        "Read mailbox/{{RULES_FILENAME}} before writing mailbox messages.",
+        "Run mailbox-read to read initial instructions.",
+        "Use mailbox-read for reads and mailbox-send for sending messages.",
+        "If you need to pause for a reply, use mailbox-send with --await-reply and stop.",
+        "Then begin working on your assigned task.",
+      ].join("\n"),
+    );
   }
 
-  return [
-    ...bootstrapLines,
-    "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime. No new mailbox messages.",
-    "",
-    "Continue your current work per AGENTS.md. Do not run mailbox-read — " +
-      "the wake-up signal is authoritative about fresh mailbox state.",
-    "",
-    `Working directory: ${AGENT_DIR}`,
-  ].join("\n");
+  return compose(
+    [
+      "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime. No new mailbox messages.",
+      "",
+      "Continue your current work per AGENTS.md. Do not run mailbox-read — " +
+        "the wake-up signal is authoritative about fresh mailbox state.",
+    ].join("\n"),
+  );
 }
 
 function buildCodex() {
@@ -766,6 +888,8 @@ async function main() {
         await sleepWithWakeup(interval);
         continue;
       }
+
+      runPreHeartbeatHook();
 
       const mailboxStatus = buildMailboxStatus();
       const pendingSnapshot = collectPendingSnapshot();
