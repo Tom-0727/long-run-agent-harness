@@ -138,6 +138,7 @@ def write_agent_json(
             "default_interval_minutes": interval,
             "default_max_turns": 400,
             "default_max_budget_usd": 5.0,
+            "default_compact_every_n_heartbeats": 0,
         },
     }
     (runtime_dir / "agent.json").write_text(
