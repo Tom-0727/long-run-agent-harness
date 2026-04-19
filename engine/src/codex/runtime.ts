@@ -9,6 +9,9 @@ import {
   writeHeartbeat,
   writeInterval,
   readInterval,
+  readCompactInterval,
+  bumpCompactCount,
+  resetCompactCount,
   decidePreInvoke,
   clearUnchangedPending,
   hasAnyPending,
@@ -16,7 +19,7 @@ import {
   type AgentIdentity,
   type AgentPaths,
 } from "../harness-core/index.js";
-import { Codex, type ThreadOptions, type ThreadEvent } from "@openai/codex-sdk";
+import { CodexAppServerClient } from "./app-server-client.js";
 
 function parseArgs(argv: string[]): { agentDir: string } {
   for (let i = 0; i < argv.length; i++) {
@@ -37,59 +40,75 @@ function saveThreadId(paths: AgentPaths, tid: string): void {
 
 let shuttingDown = false;
 
-async function invokeAgent(
+async function ensureThread(
+  client: CodexAppServerClient,
   paths: AgentPaths,
-  identity: AgentIdentity,
+  log: ReturnType<typeof createLogger>
+): Promise<string> {
+  const existing = loadThreadId(paths);
+  if (existing) {
+    await client.resumeThread(existing, {
+      sandbox: "workspace-write",
+      approvalPolicy: "never",
+      skipGitRepoCheck: true,
+    });
+    log.info(`resumed thread ${existing}`);
+    return existing;
+  }
+  const tid = await client.startThread({
+    cwd: paths.agentDir,
+    sandbox: "workspace-write",
+    approvalPolicy: "never",
+    skipGitRepoCheck: true,
+  });
+  saveThreadId(paths, tid);
+  log.info(`started thread ${tid}`);
+  return tid;
+}
+
+async function invokeAgent(
+  client: CodexAppServerClient,
+  threadId: string,
   prompt: string,
   log: ReturnType<typeof createLogger>
 ): Promise<void> {
-  const threadId = loadThreadId(paths);
-  const codex = new Codex({});
-
-  const threadOptions: ThreadOptions = {
-    workingDirectory: paths.agentDir,
-    sandboxMode: "workspace-write",
-    approvalPolicy: "never",
-    skipGitRepoCheck: true,
-    networkAccessEnabled: true,
-    webSearchEnabled: true,
-  };
-
-  const thread = threadId
-    ? codex.resumeThread(threadId, threadOptions)
-    : codex.startThread(threadOptions);
-
-  log.info(threadId ? `resuming thread ${threadId}` : "starting new thread");
-
-  const { events } = await thread.runStreamed(prompt);
-
-  for await (const event of events as AsyncGenerator<ThreadEvent>) {
-    if (event.type === "thread.started") {
-      saveThreadId(paths, event.thread_id);
-    } else if (event.type === "item.completed") {
-      const item = event.item;
-      if (item.type === "agent_message") {
-        log.info(`agent: ${item.text.slice(0, 200)}`);
-      } else if (item.type === "command_execution") {
-        log.info(`cmd: ${item.command.slice(0, 160)} exit=${item.exit_code ?? "?"}`);
-      } else if (item.type === "mcp_tool_call") {
-        log.info(`tool: ${item.server}:${item.tool}`);
-      } else if (item.type === "file_change") {
-        log.info(`file_change: ${item.changes.length} files status=${item.status}`);
-      } else if (item.type === "error") {
-        log.warn(`item error: ${item.message}`);
-      }
-    } else if (event.type === "turn.completed") {
-      const u = event.usage;
-      log.info(
-        `heartbeat ok. tokens in=${u.input_tokens} out=${u.output_tokens} cached=${u.cached_input_tokens}`
-      );
-    } else if (event.type === "turn.failed") {
-      log.warn(`heartbeat failed: ${event.error.message}`);
-    } else if (event.type === "error") {
-      log.error(`stream error: ${event.message}`);
+  const result = await client.runTurn(
+    { threadId, text: prompt },
+    {
+      onItemCompleted: (n) => {
+        const item = n.item as { type?: string; text?: string; command?: string; exit_code?: number; server?: string; tool?: string; message?: string };
+        if (item.type === "agentMessage" && typeof item.text === "string") {
+          log.info(`agent: ${item.text.slice(0, 200)}`);
+        } else if (item.type === "commandExecution") {
+          log.info(`cmd: ${String(item.command ?? "").slice(0, 160)} exit=${item.exit_code ?? "?"}`);
+        } else if (item.type === "mcpToolCall") {
+          log.info(`tool: ${item.server ?? ""}:${item.tool ?? ""}`);
+        } else if (item.type === "fileChange") {
+          log.info(`file_change`);
+        }
+      },
     }
-  }
+  );
+  const u = result.usage ?? {};
+  log.info(
+    `heartbeat ok. tokens in=${u.input_tokens ?? 0} out=${u.output_tokens ?? 0} cached=${u.cached_input_tokens ?? 0}`
+  );
+}
+
+async function invokeCompact(
+  client: CodexAppServerClient,
+  threadId: string,
+  log: ReturnType<typeof createLogger>
+): Promise<boolean> {
+  let sawCompactionItem = false;
+  await client.compactThread(threadId, {
+    onItemCompleted: (n) => {
+      const item = n.item as { type?: string };
+      if (item.type === "contextCompaction") sawCompactionItem = true;
+    },
+  });
+  log.info(`compact ok (compactionItem=${sawCompactionItem})`);
+  return true;
 }
 
 async function main(): Promise<void> {
@@ -99,6 +118,12 @@ async function main(): Promise<void> {
   const log = createLogger(paths, "runtime");
 
   checkAndWritePid(paths, "runtime");
+
+  const client = new CodexAppServerClient({
+    info: (m) => log.info(m),
+    warn: (m) => log.warn(m),
+    error: (m) => log.error(m),
+  });
 
   process.on("SIGINT", () => {
     log.info("SIGINT received");
@@ -111,7 +136,9 @@ async function main(): Promise<void> {
 
   writeInterval(paths, readInterval(paths, identity.runtime.default_interval_minutes));
 
-  log.info(`starting ${identity.agent_name} on codex runtime`);
+  log.info(`starting ${identity.agent_name} on codex runtime (app-server)`);
+  await client.start();
+
   let firstHeartbeat = loadThreadId(paths) === null;
 
   try {
@@ -133,14 +160,42 @@ async function main(): Promise<void> {
         continue;
       }
 
+      if (!client.isAlive()) {
+        log.warn("app-server not alive; restarting");
+        await client.start();
+      }
+
+      let invokeOk = true;
+      let threadId: string | null = null;
       try {
-        await invokeAgent(paths, identity, decision.prompt!, log);
+        threadId = await ensureThread(client, paths, log);
+        await invokeAgent(client, threadId, decision.prompt!, log);
       } catch (err) {
+        invokeOk = false;
         log.error(`invoke error: ${(err as Error).message}`);
       } finally {
         clearUnchangedPending(paths, decision.pendingSnapshot ?? {});
       }
       firstHeartbeat = false;
+
+      if (invokeOk && threadId) {
+        const threshold = readCompactInterval(
+          paths,
+          identity.runtime.default_compact_every_n_heartbeats
+        );
+        if (threshold > 0) {
+          const count = bumpCompactCount(paths);
+          if (count >= threshold) {
+            log.info(`compact threshold reached (${count}/${threshold}); compacting`);
+            try {
+              const ok = await invokeCompact(client, threadId, log);
+              if (ok) resetCompactCount(paths);
+            } catch (err) {
+              log.error(`compact error: ${(err as Error).message}`);
+            }
+          }
+        }
+      }
 
       if (hasAnyPending(paths)) {
         log.info("more pending messages; continuing immediately");
@@ -152,6 +207,11 @@ async function main(): Promise<void> {
       await sleepWithWakeup(paths, interval * 60, () => shuttingDown);
     }
   } finally {
+    try {
+      await client.stop();
+    } catch {
+      /* ignore */
+    }
     cleanupPid(paths, "runtime");
     log.info("runtime stopped");
   }
