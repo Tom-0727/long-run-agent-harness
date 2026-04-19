@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -241,43 +242,155 @@ def build_bootstrap_notice(phase: str) -> str:
     )
 
 
+# ─── Todo / Scheduled Task wake-up sections ──────────────────────────
+
+def _safe_json_list(path: Path) -> list:
+    """Read *path* as a JSON list. Return [] on any error or if not a list."""
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _load_due_reminders_section(agent_workdir: Path) -> str:
+    """Render the 'Due reminders this minute' section from Runtime/due_reminders.json.
+
+    Returns "" when the file is missing, unreadable, or names no ids.
+    Cross-references scheduled_tasks.json so titles and subtasks appear — raw
+    ids alone are not useful to an LLM reader.
+    """
+    due_ids = _safe_json_list(agent_workdir / "Runtime" / "due_reminders.json")
+    if not due_ids:
+        return ""
+    tasks = _safe_json_list(agent_workdir / "scheduled_tasks.json")
+    by_id = {t.get("id"): t for t in tasks if isinstance(t, dict)}
+
+    lines = ["Due reminders this minute:"]
+    for task_id in due_ids:
+        task = by_id.get(task_id)
+        if task is None:
+            lines.append(f"  - {task_id} (scheduled task record missing)")
+            continue
+        title = task.get("title", "")
+        lines.append(f"  - {title} [{task_id}]")
+        desc = (task.get("description") or "").strip()
+        if desc:
+            lines.append(f"      {desc}")
+        for sub in task.get("subtasks", []) or []:
+            text = (sub.get("text") or "").strip() if isinstance(sub, dict) else ""
+            if text:
+                lines.append(f"      • {text}")
+    return "\n".join(lines)
+
+
+def _load_todo_section(agent_workdir: Path) -> str:
+    """Render today's 'Todos' section from todo_list/<YYYYMM>/<DD>.json.
+
+    Returns "" when the day file is missing or empty. Mirrors fetch_today.py's
+    default-today behaviour — today is taken from datetime.now().
+    """
+    day = datetime.now()
+    day_path = (
+        agent_workdir
+        / "todo_list"
+        / day.strftime("%Y%m")
+        / f"{day.strftime('%d')}.json"
+    )
+    todos = _safe_json_list(day_path)
+    if not todos:
+        return ""
+
+    lines = ["Today's Todos:"]
+    for todo in todos:
+        if not isinstance(todo, dict):
+            continue
+        mark = "x" if todo.get("done") else " "
+        title = todo.get("title", "")
+        todo_id = todo.get("id", "")
+        lines.append(f"  - [{mark}] {title} [{todo_id}]")
+        desc = (todo.get("description") or "").strip()
+        if desc:
+            lines.append(f"      {desc}")
+        for sub in todo.get("subtasks", []) or []:
+            if not isinstance(sub, dict):
+                continue
+            sub_mark = "x" if sub.get("done") else " "
+            text = (sub.get("text") or "").strip()
+            if text:
+                lines.append(f"      • [{sub_mark}] {text}")
+    return "\n".join(lines)
+
+
 # ─── Prompt building ─────────────────────────────────────────────────
 
-def build_prompt(first_heartbeat: bool, mailbox_status: str) -> str:
+def build_prompt(
+    first_heartbeat: bool,
+    mailbox_status: str,
+    agent_workdir: Path = AGENT_DIR,
+) -> str:
     bootstrap_phase = read_bootstrap_phase()
     bootstrap_notice = build_bootstrap_notice(bootstrap_phase)
+    due_section = _load_due_reminders_section(agent_workdir)
+    todo_section = _load_todo_section(agent_workdir)
+
+    def _compose(body: str) -> str:
+        parts = [
+            bootstrap_notice.rstrip(),
+            due_section,
+            todo_section,
+            body.rstrip(),
+            f"Working directory: {agent_workdir}",
+        ]
+        return "\n\n".join(p for p in parts if p)
+
     if mailbox_status:
-        return (
-            f"{bootstrap_notice}"
+        return _compose(
             "New mailbox messages have arrived.\n\n"
             f"{mailbox_status}\n\n"
             "1. Run: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary\n"
             "2. Read messages from contacts with unread messages using: read_mailbox.py --from <contact>\n"
             "3. Address the messages and continue your current work.\n"
-            "4. To reply, use: send_mailbox.py --to <contact> --message \"...\"\n\n"
-            f"Working directory: {AGENT_DIR}"
+            "4. To reply, use: send_mailbox.py --to <contact> --message \"...\""
         )
 
     if first_heartbeat:
-        return (
-            f"{bootstrap_notice}"
+        return _compose(
             "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
             "Read CLAUDE.md to understand your behavioral rules, including the "
             "Bootstrap Protocol that gates your first phases of work.\n"
             "Read your mailbox: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py\n"
             "For mailbox operations, run scripts directly via Bash (see CLAUDE.md Skills Usage section).\n"
             "If you need to pause for a reply, use send_mailbox.py with --await-reply.\n"
-            "Then begin working on your assigned task.\n\n"
-            f"Working directory: {AGENT_DIR}"
+            "Then begin working on your assigned task."
         )
-    else:
-        return (
-            f"{bootstrap_notice}"
-            "Heartbeat wakeup for {{AGENT_NAME}}. No new mailbox messages.\n\n"
-            "Continue your current work per CLAUDE.md. Do not run read_mailbox.py — "
-            "the wake-up signal is authoritative about fresh mailbox state.\n\n"
-            f"Working directory: {AGENT_DIR}"
+
+    return _compose(
+        "Heartbeat wakeup for {{AGENT_NAME}}. No new mailbox messages.\n\n"
+        "Continue your current work per CLAUDE.md. Do not run read_mailbox.py — "
+        "the wake-up signal is authoritative about fresh mailbox state."
+    )
+
+
+def _run_pre_heartbeat_hook() -> None:
+    """Invoke the todo skill's pre-heartbeat hook before composing the prompt.
+
+    Never raises. A hook failure must not take the heartbeat down — log and
+    continue so the agent still wakes up and can investigate.
+    """
+    hook = AGENT_DIR / ".claude/skills/todo/scripts/pre_heartbeat.py"
+    if not hook.exists():
+        return
+    try:
+        subprocess.run(
+            ["uv", "run", "python", str(hook), "--agent-workdir", str(AGENT_DIR)],
+            check=False,
+            timeout=15,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
+    except Exception as exc:  # noqa: BLE001 — deliberately broad
+        log(f"pre_heartbeat hook failed: {exc}")
 
 
 # ─── Agent invocation ────────────────────────────────────────────────
@@ -522,6 +635,7 @@ async def main():
                 continue
 
             # Build prompt and invoke
+            _run_pre_heartbeat_hook()
             mailbox_status = build_mailbox_status()
             pending_snapshot = collect_pending_snapshot()
             prompt = build_prompt(first_heartbeat, mailbox_status)
