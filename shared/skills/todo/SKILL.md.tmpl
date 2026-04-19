@@ -112,10 +112,12 @@ uv run python ${CLAUDE_SKILL_DIR}/scripts/list_scheduled.py
 uv run python ${CLAUDE_SKILL_DIR}/scripts/delete_scheduled.py --id s<n>
 ```
 
-The pre-heartbeat hook (`pre_heartbeat.py`) that reads `scheduled_tasks.json`
-to produce `Runtime/due_reminders.json` is scaffolded separately; it lands
-alongside the runtime integration in
-`providers/claude/run_claude.py.tmpl` (out of scope for this slice).
+The pre-heartbeat hook (`pre_heartbeat.py`) is invoked by the Claude runtime
+immediately before each wake-up prompt is built. It reads
+`scheduled_tasks.json` and writes `Runtime/due_reminders.json`; the runtime
+then renders a "Due reminders this minute" section (plus today's Todo list)
+into the wake-up prompt so the agent sees its reminders and open todos as
+soon as it wakes.
 
 ## Convenience reader
 
