@@ -33,9 +33,25 @@ function MetricCard({ title, rows }) {
   `;
 }
 
+function tokenRows(provider, lastTurn, lifetime) {
+  const rows = [
+    ['Last Turn input / output', `${fmtNum(lastTurn.input_tokens)} / ${fmtNum(lastTurn.output_tokens)}`],
+    ['Lifetime input / output', `${fmtNum(lifetime.input_tokens)} / ${fmtNum(lifetime.output_tokens)}`],
+  ];
+  if (provider === 'codex') {
+    rows.splice(1, 0, ['Last Turn cached', fmtNum(lastTurn.cached_input_tokens)]);
+    rows.push(['Lifetime cached', fmtNum(lifetime.cached_input_tokens)]);
+  } else {
+    rows.splice(1, 0, ['Last Turn cache read / create', `${fmtNum(lastTurn.cache_read_input_tokens)} / ${fmtNum(lastTurn.cache_creation_input_tokens)}`]);
+    rows.push(['Lifetime cache read / create', `${fmtNum(lifetime.cache_read_input_tokens)} / ${fmtNum(lifetime.cache_creation_input_tokens)}`]);
+  }
+  return rows;
+}
+
 export function ObservabilityPanel({ name }) {
   const metrics = useStore((s) => s.metrics);
   const error = useStore((s) => s.metricsError);
+  const provider = useStore((s) => s.detail?.provider);
 
   useEffect(() => {
     if (name && !metrics && !error) loadMetrics(name);
@@ -65,7 +81,6 @@ export function ObservabilityPanel({ name }) {
         <${MetricCard}
           title="Compaction"
           rows=${[
-            ['Threshold', fmtNum(compact.threshold)],
             ['Count since last', fmtNum(compact.count_since_last)],
             ['Total compacts', fmtNum(compact.total_compacts)],
             ['Last compact at', fmtTs(compact.last_compact_at)],
@@ -73,12 +88,7 @@ export function ObservabilityPanel({ name }) {
         />
         <${MetricCard}
           title="Tokens"
-          rows=${[
-            ['Last Turn input / output', `${fmtNum(lastTurn.input_tokens)} / ${fmtNum(lastTurn.output_tokens)}`],
-            ['Cache read / create / cached', `${fmtNum(lastTurn.cache_read_input_tokens)} / ${fmtNum(lastTurn.cache_creation_input_tokens)} / ${fmtNum(lastTurn.cached_input_tokens)}`],
-            ['Lifetime input / output', `${fmtNum(lifetime.input_tokens)} / ${fmtNum(lifetime.output_tokens)}`],
-            ['Lifetime cache read / create / cached', `${fmtNum(lifetime.cache_read_input_tokens)} / ${fmtNum(lifetime.cache_creation_input_tokens)} / ${fmtNum(lifetime.cached_input_tokens)}`],
-          ]}
+          rows=${tokenRows(provider, lastTurn, lifetime)}
         />
       </div>
     </section>

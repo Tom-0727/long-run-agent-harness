@@ -245,7 +245,6 @@ def _default_metrics() -> dict:
             "total_duration_seconds": 0,
         },
         "compact": {
-            "threshold": 0,
             "count_since_last": 0,
             "total_compacts": 0,
             "total_heartbeats_between_compacts": 0,

@@ -17,7 +17,6 @@ import {
   appendEvent,
   recordHeartbeat,
   recordCompactSuccess,
-  updateCompactThreshold,
   type AgentPaths,
   type TurnTokens,
 } from "../harness-core/index.js";
@@ -107,16 +106,16 @@ async function invokeAgent(
       },
     }
   );
-  const u = result.usage ?? {};
-  const inputT = u.input_tokens ?? 0;
+  const last = result.tokenUsage?.last;
+  const total = result.tokenUsage?.total;
   const tokens: TurnTokens = {
-    input_tokens: inputT,
-    output_tokens: u.output_tokens ?? 0,
-    cached_input_tokens: u.cached_input_tokens ?? 0,
-    estimated_context_tokens: inputT,
+    input_tokens: last?.inputTokens ?? 0,
+    output_tokens: last?.outputTokens ?? 0,
+    cached_input_tokens: last?.cachedInputTokens ?? 0,
+    estimated_context_tokens: total?.totalTokens ?? last?.totalTokens ?? 0,
   };
   log.info(
-    `heartbeat ok. tokens in=${inputT} out=${tokens.output_tokens} cached=${tokens.cached_input_tokens} ctx=${tokens.estimated_context_tokens}`
+    `heartbeat ok. tokens in=${tokens.input_tokens} out=${tokens.output_tokens} cached=${tokens.cached_input_tokens} ctx=${tokens.estimated_context_tokens}`
   );
   return tokens;
 }
@@ -201,7 +200,6 @@ async function main(): Promise<void> {
         paths,
         identity.runtime.default_compact_every_n_heartbeats
       );
-      updateCompactThreshold(paths, threshold);
 
       appendEvent(paths, "heartbeat_start", {});
       const startedAt = Date.now();
@@ -229,7 +227,7 @@ async function main(): Promise<void> {
       }
       const durationSeconds = (Date.now() - startedAt) / 1000;
       const m = invokeOk
-        ? recordHeartbeat(paths, { durationSeconds, tokens, compactThreshold: threshold })
+        ? recordHeartbeat(paths, { durationSeconds, tokens })
         : null;
       appendEvent(paths, "heartbeat_end", {
         duration_seconds: durationSeconds,

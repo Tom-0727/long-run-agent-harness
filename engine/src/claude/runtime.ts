@@ -19,7 +19,6 @@ import {
   appendEvent,
   recordHeartbeat,
   recordCompactSuccess,
-  updateCompactThreshold,
   type AgentIdentity,
   type AgentPaths,
   type TurnTokens,
@@ -301,7 +300,6 @@ async function main(): Promise<void> {
         paths,
         identity.runtime.default_compact_every_n_heartbeats
       );
-      updateCompactThreshold(paths, threshold);
 
       appendEvent(paths, "heartbeat_start", {});
       const startedAt = Date.now();
@@ -319,7 +317,7 @@ async function main(): Promise<void> {
       }
       const durationSeconds = (Date.now() - startedAt) / 1000;
       const m = invokeOk
-        ? recordHeartbeat(paths, { durationSeconds, tokens, compactThreshold: threshold })
+        ? recordHeartbeat(paths, { durationSeconds, tokens })
         : null;
       appendEvent(paths, "heartbeat_end", {
         duration_seconds: durationSeconds,

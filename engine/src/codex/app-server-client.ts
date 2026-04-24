@@ -22,14 +22,24 @@ export interface ItemCompletedNotification {
   item: Record<string, unknown>;
 }
 
+export interface TokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+export interface ThreadTokenUsage {
+  total: TokenUsageBreakdown;
+  last: TokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
 export interface TurnCompletedEvent {
   threadId: string;
   turnId: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cached_input_tokens?: number;
-  };
+  tokenUsage?: ThreadTokenUsage;
 }
 
 export interface TurnFailedEvent {
@@ -292,6 +302,7 @@ export class CodexAppServerClient {
     return new Promise<TurnCompletedEvent>((resolve, reject) => {
       const disposers: Array<() => void> = [];
       let settled = false;
+      let latestTokenUsage: ThreadTokenUsage | undefined;
       const cleanup = (): void => {
         for (const d of disposers) d();
         clearTimeout(timer);
@@ -336,10 +347,21 @@ export class CodexAppServerClient {
         })
       );
       disposers.push(
+        this.onNotification("thread/tokenUsage/updated", (params) => {
+          const p = params as { threadId?: string; tokenUsage?: ThreadTokenUsage };
+          if (p.threadId !== opts.threadId || !p.tokenUsage) return;
+          latestTokenUsage = p.tokenUsage;
+        })
+      );
+      disposers.push(
         this.onNotification("turn/completed", (params) => {
-          const p = params as TurnCompletedEvent;
+          const p = params as { threadId?: string; turn?: { id?: string } };
           if (p.threadId !== opts.threadId) return;
-          settleResolve(p);
+          settleResolve({
+            threadId: opts.threadId,
+            turnId: p.turn?.id ?? "",
+            tokenUsage: latestTokenUsage,
+          });
         })
       );
       disposers.push(
@@ -394,9 +416,9 @@ export class CodexAppServerClient {
       );
       disposers.push(
         this.onNotification("turn/completed", (params) => {
-          const p = params as TurnCompletedEvent;
+          const p = params as { threadId?: string; turn?: { id?: string } };
           if (p.threadId !== threadId) return;
-          settleResolve(p);
+          settleResolve({ threadId, turnId: p.turn?.id ?? "" });
         })
       );
       disposers.push(

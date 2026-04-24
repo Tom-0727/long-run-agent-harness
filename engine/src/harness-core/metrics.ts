@@ -19,7 +19,6 @@ export interface HeartbeatMetrics {
 }
 
 export interface CompactMetrics {
-  threshold: number;
   count_since_last: number;
   total_compacts: number;
   total_heartbeats_between_compacts: number;
@@ -57,7 +56,6 @@ function defaultMetrics(): Metrics {
       total_duration_seconds: 0,
     },
     compact: {
-      threshold: 0,
       count_since_last: 0,
       total_compacts: 0,
       total_heartbeats_between_compacts: 0,
@@ -84,10 +82,18 @@ export function readMetrics(paths: AgentPaths): Metrics {
     const raw = fs.readFileSync(paths.metricsFile, "utf8");
     const parsed = JSON.parse(raw) as Partial<Metrics>;
     const base = defaultMetrics();
+    const pc: Partial<CompactMetrics> = parsed.compact ?? {};
     return {
       schema_version: 1,
       heartbeat: { ...base.heartbeat, ...(parsed.heartbeat ?? {}) },
-      compact: { ...base.compact, ...(parsed.compact ?? {}) },
+      compact: {
+        count_since_last: pc.count_since_last ?? base.compact.count_since_last,
+        total_compacts: pc.total_compacts ?? base.compact.total_compacts,
+        total_heartbeats_between_compacts:
+          pc.total_heartbeats_between_compacts ?? base.compact.total_heartbeats_between_compacts,
+        avg_heartbeats_between: pc.avg_heartbeats_between ?? base.compact.avg_heartbeats_between,
+        last_compact_at: pc.last_compact_at ?? base.compact.last_compact_at,
+      },
       tokens: {
         last_turn: { ...(parsed.tokens?.last_turn ?? {}) },
         estimated_context_tokens:
@@ -110,7 +116,6 @@ export function writeMetrics(paths: AgentPaths, m: Metrics): void {
 export interface HeartbeatSample {
   durationSeconds: number;
   tokens: TurnTokens;
-  compactThreshold: number;
 }
 
 export function recordHeartbeat(paths: AgentPaths, sample: HeartbeatSample): Metrics {
@@ -122,7 +127,6 @@ export function recordHeartbeat(paths: AgentPaths, sample: HeartbeatSample): Met
   hb.total_duration_seconds += sample.durationSeconds;
   hb.avg_duration_seconds = hb.total_duration_seconds / hb.count;
 
-  m.compact.threshold = sample.compactThreshold;
   m.compact.count_since_last += 1;
 
   const t = sample.tokens;
@@ -156,9 +160,3 @@ export function recordCompactSuccess(paths: AgentPaths): Metrics {
   return m;
 }
 
-export function updateCompactThreshold(paths: AgentPaths, threshold: number): void {
-  const m = readMetrics(paths);
-  if (m.compact.threshold === threshold) return;
-  m.compact.threshold = threshold;
-  writeMetrics(paths, m);
-}
