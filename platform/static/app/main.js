@@ -14,9 +14,13 @@ import { ImportModal } from './components/ImportModal.js';
 
 function emptyMemoryIndex() {
   return {
-    knowledge: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
-    episodes: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
+    knowledge: { items: [], nextCursor: null, loaded: false, loading: false, error: null, dates: [] },
+    episodes: { items: [], nextCursor: null, loaded: false, loading: false, error: null, dates: [] },
   };
+}
+
+function emptyMemoryBucket(dates = []) {
+  return { items: [], nextCursor: null, loaded: false, loading: false, error: null, dates };
 }
 
 // ── Data loaders ──
@@ -52,10 +56,11 @@ export async function loadMetrics(name) {
   }
 }
 
-export async function loadMemoryIndex(name, kind = 'knowledge', { cursor = '', append = false } = {}) {
+export async function loadMemoryIndex(name, kind = 'knowledge', { cursor = '', append = false, date = null } = {}) {
   if (!name) return;
   const s = getState();
-  const prev = s.memoryIndex[kind] || { items: [], nextCursor: null, loaded: false, loading: false, error: null };
+  const selectedDate = kind === 'episodes' ? (date ?? s.memoryEpisodeDate) : '';
+  const prev = s.memoryIndex[kind] || emptyMemoryBucket();
   setState({
     memoryIndex: {
       ...s.memoryIndex,
@@ -64,10 +69,11 @@ export async function loadMemoryIndex(name, kind = 'knowledge', { cursor = '', a
   });
 
   try {
-    const data = await api.getAgentMemoryIndex(name, { kind, limit: 20, cursor });
+    const data = await api.getAgentMemoryIndex(name, { kind, limit: 20, cursor, date: selectedDate });
     if (getState().currentAgent !== name) return;
     const current = getState().memoryIndex[kind] || prev;
     const items = append ? [...current.items, ...(data.items || [])] : (data.items || []);
+    const dates = data.dates || current.dates || [];
     setState({
       memoryIndex: {
         ...getState().memoryIndex,
@@ -77,6 +83,7 @@ export async function loadMemoryIndex(name, kind = 'knowledge', { cursor = '', a
           loaded: true,
           loading: false,
           error: null,
+          dates,
         },
       },
     });
@@ -135,6 +142,7 @@ export function goDashboard() {
     memoryIndex: emptyMemoryIndex(),
     memoryFiles: {},
     memoryKind: 'knowledge',
+    memoryEpisodeDate: '',
     memorySelectedPath: null,
   });
   loadOverview();
@@ -151,6 +159,7 @@ export function goDetail(name) {
     memoryIndex: emptyMemoryIndex(),
     memoryFiles: {},
     memoryKind: 'knowledge',
+    memoryEpisodeDate: '',
     memorySelectedPath: null,
     historyContact: 'human',
   });
@@ -166,6 +175,19 @@ export function setHistoryContact(contact) {
 
 export function setMemoryKind(kind) {
   setState({ memoryKind: kind, memorySelectedPath: null });
+}
+
+export function setMemoryEpisodeDate(date) {
+  const s = getState();
+  const current = s.memoryIndex.episodes || emptyMemoryBucket();
+  setState({
+    memoryEpisodeDate: date || '',
+    memorySelectedPath: null,
+    memoryIndex: {
+      ...s.memoryIndex,
+      episodes: emptyMemoryBucket(current.dates || []),
+    },
+  });
 }
 
 export function refreshCurrent() {

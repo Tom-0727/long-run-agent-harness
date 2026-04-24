@@ -446,6 +446,26 @@
       background: var(--accent);
       color: #fff;
     }
+    .memory-date-filter {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      margin-top: -2px;
+      margin-bottom: 10px;
+    }
+    .date-chip {
+      flex: 0 0 auto;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: var(--off-bg);
+      color: var(--ink);
+      font-size: 11px;
+    }
+    .date-chip.active {
+      background: var(--accent);
+      color: #fff;
+    }
     .memory-layout {
       display: grid;
       grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
@@ -460,6 +480,19 @@
       max-height: 60vh;
       padding: 6px;
       min-width: 0;
+    }
+    .memory-date-separator {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 5px 7px;
+      margin: 2px 0 5px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
     }
     .memory-item {
       width: 100%;

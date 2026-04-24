@@ -13,11 +13,12 @@ const state = {
   metrics: null,
   metricsError: null,
   memoryIndex: {
-    knowledge: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
-    episodes: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
+    knowledge: { items: [], nextCursor: null, loaded: false, loading: false, error: null, dates: [] },
+    episodes: { items: [], nextCursor: null, loaded: false, loading: false, error: null, dates: [] },
   },
   memoryFiles: {},         // path -> { path, content, last_modified, loading, error }
   memoryKind: 'knowledge',
+  memoryEpisodeDate: '',
   memorySelectedPath: null,
   historyContact: 'human',
   connected: false,        // SSE connection state

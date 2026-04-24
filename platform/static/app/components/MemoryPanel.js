@@ -1,7 +1,7 @@
 import { html } from '../../vendor/htm.mjs';
 import { useEffect } from '../../vendor/preact-hooks.mjs';
 import { useStore } from '../useStore.js';
-import { loadMemoryFile, loadMemoryIndex, setMemoryKind } from '../main.js';
+import { loadMemoryFile, loadMemoryIndex, setMemoryEpisodeDate, setMemoryKind } from '../main.js';
 
 
 function displayTitle(item, kind) {
@@ -22,6 +22,7 @@ function itemMeta(item, kind) {
 export function MemoryPanel({ name }) {
   const kind = useStore((s) => s.memoryKind);
   const index = useStore((s) => s.memoryIndex[kind]);
+  const episodeDate = useStore((s) => s.memoryEpisodeDate);
   const selectedPath = useStore((s) => s.memorySelectedPath);
   const files = useStore((s) => s.memoryFiles);
   const file = selectedPath ? files[selectedPath] : null;
@@ -29,7 +30,7 @@ export function MemoryPanel({ name }) {
   useEffect(() => {
     if (!name || !kind || index.loaded || index.loading) return;
     loadMemoryIndex(name, kind);
-  }, [name, kind, index.loaded, index.loading]);
+  }, [name, kind, episodeDate, index.loaded, index.loading]);
 
   useEffect(() => {
     if (!name || selectedPath || !index.items.length) return;
@@ -46,6 +47,16 @@ export function MemoryPanel({ name }) {
     loadMemoryIndex(name, kind, { cursor: index.nextCursor, append: true });
   };
 
+  const rows = [];
+  let lastDate = null;
+  for (const item of index.items) {
+    if (kind === 'episodes' && item.date && item.date !== lastDate) {
+      lastDate = item.date;
+      rows.push({ type: 'date', date: item.date });
+    }
+    rows.push({ type: 'item', item });
+  }
+
   return html`
     <section class="panel">
       <div class="panel-head">
@@ -55,20 +66,36 @@ export function MemoryPanel({ name }) {
           <button class=${kind === 'episodes' ? 'tab active' : 'tab'} onClick=${() => switchKind('episodes')}>Episodes</button>
         </div>
       </div>
+      ${kind === 'episodes' && index.dates.length ? html`
+        <div class="memory-date-filter">
+          <button class=${episodeDate ? 'date-chip' : 'date-chip active'} onClick=${() => setMemoryEpisodeDate('')}>All</button>
+          ${index.dates.map((entry) => html`
+            <button
+              key=${entry.date}
+              class=${episodeDate === entry.date ? 'date-chip active' : 'date-chip'}
+              onClick=${() => setMemoryEpisodeDate(entry.date)}
+            >
+              ${entry.date} ${entry.count}
+            </button>
+          `)}
+        </div>
+      ` : null}
       <div class="memory-layout">
         <aside class="memory-list">
           ${index.error ? html`<div class="memory-empty">Error: ${index.error}</div>` : null}
           ${!index.error && index.loading && !index.loaded ? html`<div class="memory-empty">Loading...</div>` : null}
           ${!index.error && index.loaded && !index.items.length ? html`<div class="memory-empty">No files</div>` : null}
-          ${index.items.map((item) => html`
+          ${rows.map((row) => row.type === 'date' ? html`
+            <div key=${`date-${row.date}`} class="memory-date-separator">${row.date}</div>
+          ` : html`
             <button
-              key=${item.path}
-              class=${selectedPath === item.path ? 'memory-item active' : 'memory-item'}
-              onClick=${() => loadMemoryFile(name, item.path)}
+              key=${row.item.path}
+              class=${selectedPath === row.item.path ? 'memory-item active' : 'memory-item'}
+              onClick=${() => loadMemoryFile(name, row.item.path)}
             >
-              <span class="memory-item-title">${displayTitle(item, kind)}</span>
-              <span class="memory-item-path">${item.path}</span>
-              ${itemMeta(item, kind) ? html`<span class="memory-item-meta">${itemMeta(item, kind)}</span>` : null}
+              <span class="memory-item-title">${displayTitle(row.item, kind)}</span>
+              <span class="memory-item-path">${row.item.path}</span>
+              ${itemMeta(row.item, kind) ? html`<span class="memory-item-meta">${itemMeta(row.item, kind)}</span>` : null}
             </button>
           `)}
           ${index.nextCursor !== null ? html`

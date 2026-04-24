@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import secrets
 import signal
 import subprocess
@@ -333,16 +334,53 @@ def _memory_kind_root(workdir: Path, kind: str) -> Path | None:
     return None
 
 
-def _memory_index(workdir: Path, kind: str, limit: int, cursor: int) -> dict:
+_EPISODE_TS_RE = re.compile(r"^ep--(\d{8}T\d{6}Z)--")
+_MEMORY_HOUSEKEEPING_FILES = {"README.md", "AGENTS.md", "CLAUDE.md"}
+
+
+def _is_memory_content_file(rel: Path) -> bool:
+    if any(part.startswith(".") for part in rel.parts):
+        return False
+    return rel.name not in _MEMORY_HOUSEKEEPING_FILES
+
+
+def _path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _episode_sort_and_date(path: Path) -> tuple[float, str]:
+    match = _EPISODE_TS_RE.match(path.name)
+    if match:
+        stamp = match.group(1)
+        try:
+            dt = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            return dt.timestamp(), dt.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    mtime = _path_mtime(path)
+    if not mtime:
+        return 0.0, "unknown"
+    dt = datetime.fromtimestamp(mtime, timezone.utc)
+    return mtime, dt.strftime("%Y-%m-%d")
+
+
+def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter: str = "") -> dict:
     root = _memory_kind_root(workdir, kind)
     if root is None:
         return {"error": "kind must be knowledge or episodes"}
     limit = max(1, min(limit, 100))
     cursor = max(0, cursor)
     if not root.exists():
-        return {"items": [], "next_cursor": None}
+        out: dict = {"items": [], "next_cursor": None}
+        if kind == "episodes":
+            out["dates"] = []
+        return out
 
-    files: list[Path] = []
+    entries: list[tuple[Path, float, str]] = []
+    date_counts: dict[str, int] = {}
     root_resolved = root.resolve()
     try:
         for path in root.rglob("*.md"):
@@ -351,22 +389,26 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int) -> dict:
                 path.resolve().relative_to(root_resolved)
             except ValueError:
                 continue
-            if any(part.startswith(".") for part in rel.parts):
+            if not _is_memory_content_file(rel):
                 continue
-            files.append(path)
+            if kind == "episodes":
+                sort_key, episode_date = _episode_sort_and_date(path)
+                date_counts[episode_date] = date_counts.get(episode_date, 0) + 1
+                if date_filter and episode_date != date_filter:
+                    continue
+                entries.append((path, sort_key, episode_date))
+            else:
+                entries.append((path, _path_mtime(path), ""))
     except OSError:
-        return {"items": [], "next_cursor": None}
+        out = {"items": [], "next_cursor": None}
+        if kind == "episodes":
+            out["dates"] = []
+        return out
 
-    def sort_mtime(path: Path) -> float:
-        try:
-            return path.stat().st_mtime
-        except OSError:
-            return 0.0
-
-    files.sort(key=sort_mtime, reverse=True)
-    page = files[cursor:cursor + limit]
+    entries.sort(key=lambda item: item[1], reverse=True)
+    page = entries[cursor:cursor + limit]
     items = []
-    for path in page:
+    for path, _, episode_date in page:
         try:
             stat = path.stat()
         except OSError:
@@ -386,10 +428,18 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int) -> dict:
         else:
             item["title"] = fm.get("title", "")
             item["objective"] = fm.get("objective", "")
+            item["date"] = episode_date
         items.append(item)
 
-    next_cursor = cursor + limit if cursor + limit < len(files) else None
-    return {"items": items, "next_cursor": next_cursor}
+    next_cursor = cursor + limit if cursor + limit < len(entries) else None
+    out = {"items": items, "next_cursor": next_cursor}
+    if kind == "episodes":
+        out["dates"] = [
+            {"date": date, "count": count}
+            for date, count in sorted(date_counts.items(), reverse=True)
+        ]
+        out["date"] = date_filter
+    return out
 
 
 def _resolve_memory_markdown(workdir: Path, raw_path: str) -> Path | None:
@@ -700,13 +750,14 @@ def api_agent_memory_index(name: str):
 
     kind = request.args.get("kind", "knowledge", type=str)
     limit = request.args.get("limit", 20, type=int)
+    date_filter = request.args.get("date", "", type=str)
     cursor_arg = request.args.get("cursor", "0", type=str)
     try:
         cursor = int(cursor_arg or "0")
     except ValueError:
         cursor = 0
 
-    result = _memory_index(workdir, kind, limit, cursor)
+    result = _memory_index(workdir, kind, limit, cursor, date_filter)
     if "error" in result:
         return jsonify(result), 400
     return jsonify(result)

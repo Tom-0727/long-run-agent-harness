@@ -29,9 +29,10 @@ export function getAgentMetrics(name) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/metrics`);
 }
 
-export function getAgentMemoryIndex(name, { kind = 'knowledge', limit = 20, cursor = '' } = {}) {
+export function getAgentMemoryIndex(name, { kind = 'knowledge', limit = 20, cursor = '', date = '' } = {}) {
   const params = { kind, limit: String(limit) };
   if (cursor !== '' && cursor !== null && cursor !== undefined) params.cursor = String(cursor);
+  if (date) params.date = date;
   const qs = new URLSearchParams(params);
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/memory/index?${qs}`);
 }
