@@ -78,18 +78,6 @@ export function setPassiveMode(name, enabled) {
   });
 }
 
-export function getCompactInterval(name) {
-  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/compact-interval`);
-}
-
-export function setCompactInterval(name, interval) {
-  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/compact-interval`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ interval }),
-  });
-}
-
 export function saveSchedule(name, schedule) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/schedule`, {
     method: 'POST',

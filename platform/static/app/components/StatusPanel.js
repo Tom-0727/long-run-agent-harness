@@ -3,7 +3,6 @@ import { useState, useEffect, useRef } from '../../vendor/preact-hooks.mjs';
 import * as api from '../api.js';
 import { goMemory, refreshCurrent } from '../main.js';
 import { SchedulePanel } from './SchedulePanel.js';
-import { CompactPanel } from './CompactPanel.js';
 
 
 export function StatusPanel({ detail }) {
@@ -96,7 +95,6 @@ export function StatusPanel({ detail }) {
         `)}
       </div>
       <${SchedulePanel} name=${detail.name} schedule=${detail.schedule} />
-      <${CompactPanel} name=${detail.name} />
     </section>
   `;
 }

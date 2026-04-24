@@ -9,6 +9,12 @@ function fmtNum(value) {
   return new Intl.NumberFormat().format(value);
 }
 
+function fmtTokens(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
+  if (value < 1000) return String(value);
+  return `${(value / 1000).toFixed(1)}k`;
+}
+
 function fmtSeconds(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) return '-';
   if (value < 60) return `${value.toFixed(1)}s`;
@@ -35,15 +41,15 @@ function MetricCard({ title, rows }) {
 
 function tokenRows(provider, lastTurn, lifetime) {
   const rows = [
-    ['Last Turn input / output', `${fmtNum(lastTurn.input_tokens)} / ${fmtNum(lastTurn.output_tokens)}`],
-    ['Lifetime input / output', `${fmtNum(lifetime.input_tokens)} / ${fmtNum(lifetime.output_tokens)}`],
+    ['Last Turn input / output', `${fmtTokens(lastTurn.input_tokens)} / ${fmtTokens(lastTurn.output_tokens)}`],
+    ['Lifetime input / output', `${fmtTokens(lifetime.input_tokens)} / ${fmtTokens(lifetime.output_tokens)}`],
   ];
   if (provider === 'codex') {
-    rows.splice(1, 0, ['Last Turn cached', fmtNum(lastTurn.cached_input_tokens)]);
-    rows.push(['Lifetime cached', fmtNum(lifetime.cached_input_tokens)]);
+    rows.splice(1, 0, ['Last Turn cached', fmtTokens(lastTurn.cached_input_tokens)]);
+    rows.push(['Lifetime cached', fmtTokens(lifetime.cached_input_tokens)]);
   } else {
-    rows.splice(1, 0, ['Last Turn cache read / create', `${fmtNum(lastTurn.cache_read_input_tokens)} / ${fmtNum(lastTurn.cache_creation_input_tokens)}`]);
-    rows.push(['Lifetime cache read / create', `${fmtNum(lifetime.cache_read_input_tokens)} / ${fmtNum(lifetime.cache_creation_input_tokens)}`]);
+    rows.splice(1, 0, ['Last Turn cache read / create', `${fmtTokens(lastTurn.cache_read_input_tokens)} / ${fmtTokens(lastTurn.cache_creation_input_tokens)}`]);
+    rows.push(['Lifetime cache read / create', `${fmtTokens(lifetime.cache_read_input_tokens)} / ${fmtTokens(lifetime.cache_creation_input_tokens)}`]);
   }
   return rows;
 }

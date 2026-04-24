@@ -889,63 +889,6 @@ def api_agent_interval(name: str):
     return jsonify({"ok": True, "interval": interval})
 
 
-# ── API: Compact interval ────────────────────────────────────────────
-
-@app.route("/api/agents/<name>/compact-interval", methods=["GET"])
-def api_agent_compact_interval_get(name: str):
-    info, workdir = _resolve_agent(name)
-    if not info:
-        return jsonify({"error": "agent not found"}), 404
-    if not workdir:
-        return jsonify({"error": "workdir not found"}), 404
-
-    override_file = workdir / "Runtime" / "compact_interval"
-    identity_file = workdir / "Runtime" / "agent.json"
-
-    default = 0
-    if identity_file.exists():
-        try:
-            ident = json.loads(identity_file.read_text(encoding="utf-8"))
-            default = int(ident.get("runtime", {}).get("default_compact_every_n_heartbeats", 0))
-        except (json.JSONDecodeError, OSError, TypeError, ValueError):
-            default = 0
-
-    override: int | None = None
-    if override_file.exists():
-        try:
-            override = int(override_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            override = None
-
-    effective = override if override is not None else default
-    return jsonify({"default": default, "override": override, "effective": effective})
-
-
-@app.route("/api/agents/<name>/compact-interval", methods=["POST"])
-def api_agent_compact_interval_set(name: str):
-    info, workdir = _resolve_agent(name)
-    if not info:
-        return jsonify({"error": "agent not found"}), 404
-    if not workdir:
-        return jsonify({"error": "workdir not found"}), 404
-
-    body = request.get_json(silent=True) or {}
-    value = body.get("interval")
-    if value is None:
-        # clear override — revert to identity default
-        override_file = workdir / "Runtime" / "compact_interval"
-        override_file.unlink(missing_ok=True)
-        return jsonify({"ok": True, "override": None})
-
-    if not isinstance(value, int) or value < 0:
-        return jsonify({"error": "interval must be a non-negative integer (0 disables)"}), 400
-
-    runtime_dir = workdir / "Runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / "compact_interval").write_text(str(value))
-    return jsonify({"ok": True, "override": value})
-
-
 # ── API: Passive mode ───────────────────────────────────────────────
 
 @app.route("/api/agents/<name>/passive", methods=["POST"])
