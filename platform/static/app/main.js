@@ -12,6 +12,13 @@ import { CreateModal } from './components/CreateModal.js';
 import { ImportModal } from './components/ImportModal.js';
 
 
+function emptyMemoryIndex() {
+  return {
+    knowledge: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
+    episodes: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
+  };
+}
+
 // ── Data loaders ──
 async function loadOverview() {
   try {
@@ -33,15 +40,122 @@ async function loadDetail(name) {
   }
 }
 
+export async function loadMetrics(name) {
+  if (!name) return;
+  try {
+    const data = await api.getAgentMetrics(name);
+    if (getState().currentAgent !== name) return;
+    setState({ metrics: data, metricsError: null });
+  } catch (err) {
+    if (getState().currentAgent !== name) return;
+    setState({ metricsError: err.message || 'failed' });
+  }
+}
+
+export async function loadMemoryIndex(name, kind = 'knowledge', { cursor = '', append = false } = {}) {
+  if (!name) return;
+  const s = getState();
+  const prev = s.memoryIndex[kind] || { items: [], nextCursor: null, loaded: false, loading: false, error: null };
+  setState({
+    memoryIndex: {
+      ...s.memoryIndex,
+      [kind]: { ...prev, loading: true, error: null },
+    },
+  });
+
+  try {
+    const data = await api.getAgentMemoryIndex(name, { kind, limit: 20, cursor });
+    if (getState().currentAgent !== name) return;
+    const current = getState().memoryIndex[kind] || prev;
+    const items = append ? [...current.items, ...(data.items || [])] : (data.items || []);
+    setState({
+      memoryIndex: {
+        ...getState().memoryIndex,
+        [kind]: {
+          items,
+          nextCursor: data.next_cursor ?? null,
+          loaded: true,
+          loading: false,
+          error: null,
+        },
+      },
+    });
+  } catch (err) {
+    if (getState().currentAgent !== name) return;
+    const current = getState().memoryIndex[kind] || prev;
+    setState({
+      memoryIndex: {
+        ...getState().memoryIndex,
+        [kind]: { ...current, loading: false, error: err.message || 'failed' },
+      },
+    });
+  }
+}
+
+export async function loadMemoryFile(name, path) {
+  if (!name || !path) return;
+  const s = getState();
+  setState({
+    memorySelectedPath: path,
+    memoryFiles: {
+      ...s.memoryFiles,
+      [path]: { ...(s.memoryFiles[path] || { path }), loading: true, error: null },
+    },
+  });
+
+  try {
+    const data = await api.getAgentMemoryFile(name, path);
+    if (getState().currentAgent !== name) return;
+    setState({
+      memoryFiles: {
+        ...getState().memoryFiles,
+        [path]: { ...data, loading: false, error: null },
+      },
+    });
+  } catch (err) {
+    if (getState().currentAgent !== name) return;
+    const current = getState().memoryFiles[path] || { path };
+    setState({
+      memoryFiles: {
+        ...getState().memoryFiles,
+        [path]: { ...current, loading: false, error: err.message || 'failed' },
+      },
+    });
+  }
+}
+
 // ── Navigation ──
 export function goDashboard() {
-  setState({ view: 'dashboard', currentAgent: null, detail: null });
+  setState({
+    view: 'dashboard',
+    currentAgent: null,
+    detail: null,
+    metrics: null,
+    metricsError: null,
+    memoryIndex: emptyMemoryIndex(),
+    memoryFiles: {},
+    memoryKind: 'knowledge',
+    memorySelectedPath: null,
+  });
   loadOverview();
 }
 
 export function goDetail(name) {
-  setState({ view: 'detail', currentAgent: name, detail: null, historyContact: 'human' });
+  setState({
+    view: 'detail',
+    currentAgent: name,
+    detail: null,
+    detailError: null,
+    metrics: null,
+    metricsError: null,
+    memoryIndex: emptyMemoryIndex(),
+    memoryFiles: {},
+    memoryKind: 'knowledge',
+    memorySelectedPath: null,
+    historyContact: 'human',
+  });
   loadDetail(name);
+  loadMetrics(name);
 }
 
 export function setHistoryContact(contact) {
@@ -50,10 +164,17 @@ export function setHistoryContact(contact) {
   if (s.currentAgent) loadDetail(s.currentAgent);
 }
 
+export function setMemoryKind(kind) {
+  setState({ memoryKind: kind, memorySelectedPath: null });
+}
+
 export function refreshCurrent() {
   const s = getState();
   if (s.view === 'dashboard') loadOverview();
-  else if (s.view === 'detail' && s.currentAgent) loadDetail(s.currentAgent);
+  else if (s.view === 'detail' && s.currentAgent) {
+    loadDetail(s.currentAgent);
+    loadMetrics(s.currentAgent);
+  }
 }
 
 export function openModal(name) {
@@ -74,6 +195,7 @@ function wireEvents() {
     } else if (s.view === 'detail' && s.currentAgent) {
       if (event.scope === 'overview' || (event.scope === 'agent' && event.name === s.currentAgent)) {
         loadDetail(s.currentAgent);
+        loadMetrics(s.currentAgent);
       }
     }
   });

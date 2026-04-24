@@ -1,0 +1,95 @@
+import { html } from '../../vendor/htm.mjs';
+import { useEffect } from '../../vendor/preact-hooks.mjs';
+import { useStore } from '../useStore.js';
+import { loadMemoryFile, loadMemoryIndex, setMemoryKind } from '../main.js';
+
+
+function displayTitle(item, kind) {
+  if (!item) return '';
+  if (kind === 'knowledge') return item.summary || item.name || item.path;
+  return item.title || item.objective || item.name || item.path;
+}
+
+function itemMeta(item, kind) {
+  const parts = [];
+  if (kind === 'episodes' && item.objective) parts.push(item.objective);
+  if (item.status) parts.push(item.status);
+  if (item.last_edited_at) parts.push(item.last_edited_at);
+  else if (item.last_modified) parts.push(item.last_modified);
+  return parts.join(' · ');
+}
+
+export function MemoryPanel({ name }) {
+  const kind = useStore((s) => s.memoryKind);
+  const index = useStore((s) => s.memoryIndex[kind]);
+  const selectedPath = useStore((s) => s.memorySelectedPath);
+  const files = useStore((s) => s.memoryFiles);
+  const file = selectedPath ? files[selectedPath] : null;
+
+  useEffect(() => {
+    if (!name || !kind || index.loaded || index.loading) return;
+    loadMemoryIndex(name, kind);
+  }, [name, kind, index.loaded, index.loading]);
+
+  useEffect(() => {
+    if (!name || selectedPath || !index.items.length) return;
+    loadMemoryFile(name, index.items[0].path);
+  }, [name, kind, selectedPath, index.items.length]);
+
+  const switchKind = (nextKind) => {
+    if (nextKind === kind) return;
+    setMemoryKind(nextKind);
+  };
+
+  const loadMore = () => {
+    if (index.nextCursor === null || index.loading) return;
+    loadMemoryIndex(name, kind, { cursor: index.nextCursor, append: true });
+  };
+
+  return html`
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Memory</h2>
+        <div class="tabs">
+          <button class=${kind === 'knowledge' ? 'tab active' : 'tab'} onClick=${() => switchKind('knowledge')}>Knowledge</button>
+          <button class=${kind === 'episodes' ? 'tab active' : 'tab'} onClick=${() => switchKind('episodes')}>Episodes</button>
+        </div>
+      </div>
+      <div class="memory-layout">
+        <aside class="memory-list">
+          ${index.error ? html`<div class="memory-empty">Error: ${index.error}</div>` : null}
+          ${!index.error && index.loading && !index.loaded ? html`<div class="memory-empty">Loading...</div>` : null}
+          ${!index.error && index.loaded && !index.items.length ? html`<div class="memory-empty">No files</div>` : null}
+          ${index.items.map((item) => html`
+            <button
+              key=${item.path}
+              class=${selectedPath === item.path ? 'memory-item active' : 'memory-item'}
+              onClick=${() => loadMemoryFile(name, item.path)}
+            >
+              <span class="memory-item-title">${displayTitle(item, kind)}</span>
+              <span class="memory-item-path">${item.path}</span>
+              ${itemMeta(item, kind) ? html`<span class="memory-item-meta">${itemMeta(item, kind)}</span>` : null}
+            </button>
+          `)}
+          ${index.nextCursor !== null ? html`
+            <button class="memory-load-more" disabled=${index.loading} onClick=${loadMore}>
+              ${index.loading ? 'Loading...' : 'Load more'}
+            </button>
+          ` : null}
+        </aside>
+        <article class="memory-content">
+          ${!selectedPath ? html`<div class="memory-empty">Select a file</div>` : null}
+          ${selectedPath && file?.loading ? html`<div class="memory-empty">Loading...</div>` : null}
+          ${selectedPath && file?.error ? html`<div class="memory-empty">Error: ${file.error}</div>` : null}
+          ${selectedPath && file && file.content !== undefined && !file.loading && !file.error ? html`
+            <div class="memory-file-head">
+              <strong>${file.path}</strong>
+              <span class="meta">${file.last_modified || ''}</span>
+            </div>
+            <pre class="memory-markdown">${file.content}</pre>
+          ` : null}
+        </article>
+      </div>
+    </section>
+  `;
+}

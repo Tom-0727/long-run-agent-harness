@@ -216,6 +216,13 @@ def _tail_file(path: Path, limit: int) -> str:
         return ""
 
 
+def _format_mtime(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OSError:
+        return ""
+
+
 def _resolve_agent(name: str):
     """Return (agent_info, workdir_path) or (None, None)."""
     info = get_agent(name)
@@ -225,6 +232,183 @@ def _resolve_agent(name: str):
     if not workdir.exists():
         return info, None
     return info, workdir
+
+
+def _default_metrics() -> dict:
+    return {
+        "schema_version": 1,
+        "heartbeat": {
+            "count": 0,
+            "last_duration_seconds": 0,
+            "avg_duration_seconds": 0,
+            "total_duration_seconds": 0,
+        },
+        "compact": {
+            "threshold": 0,
+            "count_since_last": 0,
+            "total_compacts": 0,
+            "total_heartbeats_between_compacts": 0,
+            "avg_heartbeats_between": 0,
+            "last_compact_at": None,
+        },
+        "tokens": {
+            "last_turn": {},
+            "estimated_context_tokens": 0,
+            "lifetime": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cached_input_tokens": 0,
+            },
+        },
+        "last_updated": None,
+    }
+
+
+def _read_agent_metrics(workdir: Path) -> dict:
+    metrics_path = workdir / "Runtime" / "metrics.json"
+    base = _default_metrics()
+    if not metrics_path.exists():
+        return base
+    try:
+        raw = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return base
+    if not isinstance(raw, dict):
+        return base
+
+    heartbeat = raw.get("heartbeat") if isinstance(raw.get("heartbeat"), dict) else {}
+    compact = raw.get("compact") if isinstance(raw.get("compact"), dict) else {}
+    tokens = raw.get("tokens") if isinstance(raw.get("tokens"), dict) else {}
+    lifetime = tokens.get("lifetime") if isinstance(tokens.get("lifetime"), dict) else {}
+    last_turn = tokens.get("last_turn") if isinstance(tokens.get("last_turn"), dict) else {}
+
+    return {
+        "schema_version": raw.get("schema_version", 1),
+        "heartbeat": {**base["heartbeat"], **heartbeat},
+        "compact": {**base["compact"], **compact},
+        "tokens": {
+            "last_turn": last_turn,
+            "estimated_context_tokens": tokens.get("estimated_context_tokens", 0),
+            "lifetime": {**base["tokens"]["lifetime"], **lifetime},
+        },
+        "last_updated": raw.get("last_updated"),
+    }
+
+
+def _parse_frontmatter(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}
+
+    data: dict[str, str] = {}
+    for raw_line in text[4:end].splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and (
+            (value[0] == value[-1] == "'") or (value[0] == value[-1] == '"')
+        ):
+            value = value[1:-1]
+        if key:
+            data[key] = value
+    return data
+
+
+def _memory_kind_root(workdir: Path, kind: str) -> Path | None:
+    if kind == "knowledge":
+        return workdir / "Memory" / "knowledge"
+    if kind == "episodes":
+        return workdir / "Memory" / "episodes"
+    return None
+
+
+def _memory_index(workdir: Path, kind: str, limit: int, cursor: int) -> dict:
+    root = _memory_kind_root(workdir, kind)
+    if root is None:
+        return {"error": "kind must be knowledge or episodes"}
+    limit = max(1, min(limit, 100))
+    cursor = max(0, cursor)
+    if not root.exists():
+        return {"items": [], "next_cursor": None}
+
+    files: list[Path] = []
+    root_resolved = root.resolve()
+    try:
+        for path in root.rglob("*.md"):
+            try:
+                rel = path.relative_to(root)
+                path.resolve().relative_to(root_resolved)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            files.append(path)
+    except OSError:
+        return {"items": [], "next_cursor": None}
+
+    def sort_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    files.sort(key=sort_mtime, reverse=True)
+    page = files[cursor:cursor + limit]
+    items = []
+    for path in page:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        fm = _parse_frontmatter(path)
+        rel_path = path.relative_to(workdir).as_posix()
+        item = {
+            "path": rel_path,
+            "name": path.name,
+            "last_modified": _format_mtime(path),
+            "size": stat.st_size,
+            "status": fm.get("status", ""),
+            "last_edited_at": fm.get("last_edited_at", ""),
+        }
+        if kind == "knowledge":
+            item["summary"] = fm.get("summary", "")
+        else:
+            item["title"] = fm.get("title", "")
+            item["objective"] = fm.get("objective", "")
+        items.append(item)
+
+    next_cursor = cursor + limit if cursor + limit < len(files) else None
+    return {"items": items, "next_cursor": next_cursor}
+
+
+def _resolve_memory_markdown(workdir: Path, raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    rel = Path(raw_path)
+    if rel.is_absolute() or not rel.parts or rel.parts[0] != "Memory":
+        return None
+    if any(part.startswith(".") for part in rel.parts):
+        return None
+    memory_root = (workdir / "Memory").resolve()
+    target = (workdir / rel).resolve()
+    try:
+        target.relative_to(memory_root)
+    except ValueError:
+        return None
+    if target.suffix.lower() != ".md":
+        return None
+    return target
 
 
 # ── Aggregate helpers ────────────────────────────────────────────────────
@@ -490,6 +674,68 @@ def api_agent_status(name: str):
         return jsonify({"error": "workdir not found"}), 404
     status = read_agent_status(str(workdir))
     return jsonify({**info, "status": status})
+
+
+# ── API: Agent metrics ──────────────────────────────────────────────────
+
+@app.route("/api/agents/<name>/metrics")
+def api_agent_metrics(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+    return jsonify(_read_agent_metrics(workdir))
+
+
+# ── API: Agent memory ───────────────────────────────────────────────────
+
+@app.route("/api/agents/<name>/memory/index")
+def api_agent_memory_index(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    kind = request.args.get("kind", "knowledge", type=str)
+    limit = request.args.get("limit", 20, type=int)
+    cursor_arg = request.args.get("cursor", "0", type=str)
+    try:
+        cursor = int(cursor_arg or "0")
+    except ValueError:
+        cursor = 0
+
+    result = _memory_index(workdir, kind, limit, cursor)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/agents/<name>/memory/file")
+def api_agent_memory_file(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    raw_path = request.args.get("path", "", type=str)
+    target = _resolve_memory_markdown(workdir, raw_path)
+    if target is None:
+        return jsonify({"error": "path must be a markdown file under Memory/"}), 400
+    if not target.exists() or not target.is_file():
+        return jsonify({"error": "file not found"}), 404
+
+    try:
+        content = target.read_text(encoding="utf-8")
+    except OSError:
+        return jsonify({"error": "failed to read file"}), 500
+    return jsonify({
+        "path": target.relative_to(workdir).as_posix(),
+        "content": content,
+        "last_modified": _format_mtime(target),
+    })
 
 
 # ── API: Mailbox history ─────────────────────────────────────────────────

@@ -10,6 +10,15 @@ const state = {
   overviewError: null,
   detail: null,            // full detail payload for currentAgent
   detailError: null,
+  metrics: null,
+  metricsError: null,
+  memoryIndex: {
+    knowledge: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
+    episodes: { items: [], nextCursor: null, loaded: false, loading: false, error: null },
+  },
+  memoryFiles: {},         // path -> { path, content, last_modified, loading, error }
+  memoryKind: 'knowledge',
+  memorySelectedPath: null,
   historyContact: 'human',
   connected: false,        // SSE connection state
   modal: null,             // 'create' | 'import' | null

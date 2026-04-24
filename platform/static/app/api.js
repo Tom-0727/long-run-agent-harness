@@ -25,6 +25,22 @@ export function getAgentDetail(name, { contact = 'human', limit = 50 } = {}) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/detail?${qs}`);
 }
 
+export function getAgentMetrics(name) {
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/metrics`);
+}
+
+export function getAgentMemoryIndex(name, { kind = 'knowledge', limit = 20, cursor = '' } = {}) {
+  const params = { kind, limit: String(limit) };
+  if (cursor !== '' && cursor !== null && cursor !== undefined) params.cursor = String(cursor);
+  const qs = new URLSearchParams(params);
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/memory/index?${qs}`);
+}
+
+export function getAgentMemoryFile(name, path) {
+  const qs = new URLSearchParams({ path });
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/memory/file?${qs}`);
+}
+
 export function startAgent(name) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/start`, { method: 'POST' });
 }
