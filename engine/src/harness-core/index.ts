@@ -7,6 +7,7 @@ export * from "./mailbox.js";
 export * from "./schedule.js";
 export * from "./todo.js";
 export * from "./prompt.js";
+export * from "./heartbeat.js";
 export * from "./decide.js";
 export * from "./logger.js";
 export * from "./sleep.js";

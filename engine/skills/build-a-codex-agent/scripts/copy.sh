@@ -30,7 +30,7 @@ fi
 
 mkdir -p "$(dirname "$DEST")"
 cp -r "$SCAFFOLD" "$DEST"
-echo "[build-an-agent] copied scaffold -> $DEST"
+echo "[build-a-codex-agent] copied scaffold -> $DEST"
 
 if [ -z "$NAME" ]; then
   NAME="$(basename "$DEST")"
@@ -45,11 +45,11 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(pkg, f, indent=2)
     f.write("\n")
 PY
-echo "[build-an-agent] set package.json name -> $NAME"
+echo "[build-a-codex-agent] set package.json name -> $NAME"
 
 if [ "$DO_INSTALL" = "1" ]; then
   (cd "$DEST" && npm install && npm run build)
-  echo "[build-an-agent] installed + built"
+  echo "[build-a-codex-agent] installed + built"
 else
-  echo "[build-an-agent] skipped install (--no-install)"
+  echo "[build-a-codex-agent] skipped install (--no-install)"
 fi

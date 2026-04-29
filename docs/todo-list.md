@@ -25,8 +25,8 @@ All writes use write-to-tempfile + `os.replace` so the human frontend and the ag
 ## Heartbeat Flow
 
 1. **Scheduler tick** — the runtime decides to wake the agent.
-2. **Pre-heartbeat hook** — runs `engine/skills/todo/scripts/pre_heartbeat.py` before the wake-up prompt is composed. It scans `scheduled_tasks.json`, matches on the current `HH:MM` (weekday for `kind=weekly`, exact date for `kind=date`), writes due ids to `Runtime/due_reminders.json`, and appends `"<id>@<now_minute>"` entries to `Runtime/scheduled_delivered.json` so the same minute never fires twice.
-3. **Prompt composition** — the provider runtime reads `Runtime/due_reminders.json` + today's `todo_list/<YYYYMM>/<DD>.json` and injects two sections into the wake-up prompt:
+2. **Pre-heartbeat contributor** — `engine/src/harness-core/heartbeat.ts` runs `engine/skills/todo/scripts/pre_heartbeat.py` before the wake-up prompt is composed. It scans `scheduled_tasks.json`, matches on the current `HH:MM` (weekday for `kind=weekly`, exact date for `kind=date`), writes due ids to `Runtime/due_reminders.json`, and appends `"<id>@<now_minute>"` entries to `Runtime/scheduled_delivered.json` so the same minute never fires twice.
+3. **Prompt composition** — the pre-heartbeat phase reads `Runtime/due_reminders.json` + today's `todo_list/<YYYYMM>/<DD>.json` and injects two sections into the wake-up prompt:
    - `Due reminders this minute:` (titles for each due scheduled task)
    - `Today's Todos (YYYY-MM-DD):` (indented list with subtasks and done-marks)
    Missing files degrade to empty sections, never a crash.
@@ -58,7 +58,7 @@ Skill (portable across provider runtimes, lives under `engine/skills/`):
 - `engine/skills/todo/scripts/delete_scheduled.py` — delete by id; non-zero exit if missing.
 - `engine/skills/todo/scripts/pre_heartbeat.py` — the hook; scans scheduled tasks, writes `Runtime/due_reminders.json`.
 
-Provider wiring (runs the hook and injects the two sections into wake-up prompts) lives in `engine/src/harness-core/prompt.ts` (section loaders) and `engine/src/{claude,codex}/runtime.ts` (heartbeat entry points invoke the hook via `engine/skills/todo/scripts/pre_heartbeat.py` before prompt composition).
+Provider wiring (runs the hook and injects the two sections into wake-up prompts) lives in `engine/src/harness-core/heartbeat.ts`; `engine/src/harness-core/prompt.ts` only composes the final provider-neutral wake-up prompt.
 
 Platform UI wiring lives in `platform/server/`, `platform/static/app/components/TodoPage.js`, and `platform/static/app/components/TodoPanel.js`:
 
