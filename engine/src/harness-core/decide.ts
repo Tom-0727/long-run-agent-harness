@@ -8,8 +8,6 @@ import {
   buildMailboxStatus,
 } from "./mailbox.js";
 import { isPassiveMode, readInterval } from "./state.js";
-import { runPreHeartbeatHook } from "./todo.js";
-import { buildPrompt } from "./prompt.js";
 
 export function decidePreInvoke(
   paths: AgentPaths,
@@ -48,15 +46,12 @@ export function decidePreInvoke(
     };
   }
 
-  runPreHeartbeatHook(paths);
-
   const mailboxStatus = buildMailboxStatus(paths);
   const pendingSnapshot = collectSnapshot(paths);
-  const prompt = buildPrompt(paths, identity, { firstHeartbeat, mailboxStatus });
 
   return {
     action: "invoke",
-    prompt,
+    mailboxStatus,
     pendingSnapshot,
     stateUpdate: "running",
   };

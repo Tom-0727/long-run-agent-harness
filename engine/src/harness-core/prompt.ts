@@ -1,9 +1,9 @@
-import type { AgentIdentity, AgentPaths } from "./types.js";
-import { renderDueRemindersSection, renderTodayTodosSection } from "./todo.js";
+import type { AgentIdentity, AgentPaths, PromptSection } from "./types.js";
 
 export interface BuildPromptOpts {
   firstHeartbeat: boolean;
   mailboxStatus: string;
+  preSections: PromptSection[];
 }
 
 export function buildPrompt(
@@ -11,8 +11,6 @@ export function buildPrompt(
   identity: AgentIdentity,
   opts: BuildPromptOpts
 ): string {
-  const due = renderDueRemindersSection(paths);
-  const todos = renderTodayTodosSection(paths);
   const rulesFile = identity.provider === "claude" ? "CLAUDE.md" : "AGENTS.md";
   const skillsDirHint = identity.provider === "claude" ? ".claude/skills" : ".agents/skills";
 
@@ -22,7 +20,11 @@ export function buildPrompt(
       ? firstHeartbeatBody(identity.agent_name, rulesFile, skillsDirHint)
       : normalHeartbeatBody(identity.agent_name, rulesFile);
 
-  const segments = [due, todos, body.trim(), `Working directory: ${paths.agentDir}`];
+  const segments = [
+    ...opts.preSections.map((section) => section.content),
+    body.trim(),
+    `Working directory: ${paths.agentDir}`,
+  ];
   return segments.filter((s) => s && s.length > 0).join("\n\n");
 }
 

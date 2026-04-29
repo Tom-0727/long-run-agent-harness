@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { AgentPaths, ScheduledTask, TodoItem } from "./types.js";
+import type { Logger } from "./logger.js";
 
 function safeJsonList(file: string): unknown[] {
   try {
@@ -65,18 +66,23 @@ export function renderTodayTodosSection(paths: AgentPaths, today: Date = new Dat
   return lines.join("\n");
 }
 
-export function runPreHeartbeatHook(paths: AgentPaths): void {
+export function runTodoPreHeartbeatHook(paths: AgentPaths, log?: Logger): void {
   if (!fs.existsSync(paths.skillsTodoPreHeartbeat)) return;
   try {
-    spawnSync(
+    const result = spawnSync(
       "uv",
       ["run", "python", paths.skillsTodoPreHeartbeat, "--agent-workdir", paths.agentDir],
       {
-        stdio: "ignore",
+        encoding: "utf8",
         timeout: 15000,
         env: { ...process.env, AGENT_DIR: paths.agentDir },
       }
     );
+    if (result.status !== 0) {
+      const stderr = (result.stderr || "").trim();
+      const detail = result.error?.message ?? `exit ${result.status}`;
+      log?.warn(`todo pre-heartbeat hook failed: ${detail}${stderr ? `: ${stderr}` : ""}`);
+    }
   } catch {
     /* hook failure must not take heartbeat down */
   }

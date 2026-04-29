@@ -37,6 +37,7 @@ repo-root/
 ```text
 <workdir>/
   AGENTS.md | CLAUDE.md          provider-native agent rules
+  .harness/heartbeat/            hidden per-workdir heartbeat extensions
   Runtime/
     agent.json                   identity and runtime config
     state                        running | off_hours | stopped | engine_build_failed | crashed
@@ -47,6 +48,7 @@ repo-root/
     codex_thread_id              Codex continuation state
     metrics.json                 heartbeat/token/compact metrics
     events.jsonl                 runtime event stream
+    heartbeat_extension_payload.json
     pending_messages/*.json      wake-up markers from mailbox/bridge/UI
     awaiting_reply/<contact>     waiting-for-human markers
     work_schedule.json
@@ -80,13 +82,15 @@ Stop/status entrypoints are `engine/bin/stop.sh` and `engine/bin/status.sh`.
 
 ## 5. Heartbeat Loop
 
-Both provider runtimes share this shape:
+Both provider runtimes share this lifecycle:
 
 1. Resolve paths and load `Runtime/agent.json`.
 2. Write pid, interval, heartbeat timestamp, state, events, and metrics.
 3. Ask `decidePreInvoke` whether to invoke the provider or sleep.
-4. If invoking, build a prompt, call the provider, then clear only unchanged pending markers from the pre-invoke snapshot.
-5. If new pending messages remain, run again immediately; otherwise sleep for the configured interval with one-second pending wake-up polling.
+4. If invoking, run pre-heartbeat contributors and build the prompt.
+5. Call the provider.
+6. Run post-heartbeat settlement and extensions.
+7. If new pending messages remain, run again immediately; otherwise sleep for the configured interval with one-second pending wake-up polling.
 
 `decidePreInvoke` uses this order:
 
@@ -94,8 +98,20 @@ Both provider runtimes share this shape:
 2. Clear awaiting markers for contacts that now have pending messages.
 3. Awaiting reply and no pending: short sleep.
 4. Passive mode and no pending: short sleep.
-5. Run the todo pre-heartbeat hook.
-6. Build mailbox status, pending snapshot, and prompt; invoke provider.
+5. Build mailbox status and pending snapshot; provider runtimes continue into pre-heartbeat.
+
+Pre-heartbeat order:
+
+1. Run the built-in Todo contributor.
+2. Run `.harness/heartbeat/pre/*.json` extensions in filename order.
+3. Add returned sections before the core wake-up body.
+
+Post-heartbeat order:
+
+1. Clear unchanged pending markers.
+2. Record heartbeat/token metrics and compact state.
+3. Append `heartbeat_end`.
+4. Run `.harness/heartbeat/post/*.json` extensions in filename order.
 
 ## 6. Core Module Map
 
@@ -110,6 +126,7 @@ Both provider runtimes share this shape:
 | Schedule | `engine/src/harness-core/schedule.ts` | Work-window parsing and next-window sleep |
 | Todo | `engine/src/harness-core/todo.ts` | Due reminders, today todos, pre-heartbeat hook |
 | Prompt | `engine/src/harness-core/prompt.ts` | Provider-neutral heartbeat prompt composition |
+| Heartbeat | `engine/src/harness-core/heartbeat.ts` | Pre/post lifecycle contributors and hidden extensions |
 | Decide | `engine/src/harness-core/decide.ts` | Pre-invoke decision tree |
 | Sleep | `engine/src/harness-core/sleep.ts` | Sleep with pending-message wake-up |
 | Logger | `engine/src/harness-core/logger.ts` | Runtime log file plus stdout |

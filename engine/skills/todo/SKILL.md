@@ -1,6 +1,6 @@
 ---
 name: todo
-description: Todo list mechanism for the long-run agent. Two concepts — Todo (completion-bearing work items, one JSON file per day) and Scheduled Task (wake-up configurations with minute-granular trigger times).
+description: Use when work must be tracked across heartbeats, including durable multi-step todos, time-bound commitments, or scheduled reminders.
 ---
 
 # todo

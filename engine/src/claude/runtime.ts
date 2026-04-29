@@ -13,13 +13,12 @@ import {
   writeInterval,
   readInterval,
   decidePreInvoke,
-  clearUnchangedPending,
   hasAnyPending,
   sleepWithWakeup,
   appendEvent,
-  recordHeartbeat,
-  syncCompactState,
-  utcnow,
+  buildPrompt,
+  runPreHeartbeat,
+  runPostHeartbeat,
   type AgentIdentity,
   type AgentPaths,
   type CompactObservation,
@@ -282,50 +281,42 @@ async function main(): Promise<void> {
         continue;
       }
 
+      const mailboxStatus = decision.mailboxStatus ?? "";
+      const pre = runPreHeartbeat(paths, identity, { firstHeartbeat, mailboxStatus }, log);
+      const prompt = buildPrompt(paths, identity, {
+        firstHeartbeat,
+        mailboxStatus,
+        preSections: pre.promptSections,
+      });
+
       appendEvent(paths, "heartbeat_start", {});
       const startedAt = Date.now();
       let invokeOk = true;
       let tokens: TurnTokens = {};
       try {
-        tokens = await invokeAgent(paths, identity, decision.prompt!, log);
+        tokens = await invokeAgent(paths, identity, prompt, log);
       } catch (err) {
         invokeOk = false;
         const msg = (err as Error).message;
         log.error(`invoke error: ${msg}`);
         appendEvent(paths, "error", { phase: "invoke", message: msg });
-      } finally {
-        clearUnchangedPending(paths, decision.pendingSnapshot ?? {});
       }
       const durationSeconds = (Date.now() - startedAt) / 1000;
-      const heartbeatTs = utcnow();
-      let m = invokeOk
-        ? recordHeartbeat(paths, { durationSeconds, tokens })
-        : null;
-      if (invokeOk && m) {
-        const sid = loadSessionId(paths);
-        if (sid) {
-          const obs = scanClaudeCompactLog(sid);
-          const synced = syncCompactState(paths, { ...obs, currentHeartbeatTs: heartbeatTs });
-          if (synced.compact.total_compacts !== m.compact.total_compacts) {
-            appendEvent(paths, "compact_synced", {
-              total_compacts: synced.compact.total_compacts,
-              last_compact_at: synced.compact.last_compact_at,
-              delta: synced.compact.total_compacts - m.compact.total_compacts,
-            });
-            log.info(
-              `compact log sync: total=${synced.compact.total_compacts} (+${synced.compact.total_compacts - m.compact.total_compacts})`
-            );
-          }
-          m = synced;
-        }
-      }
-      appendEvent(paths, "heartbeat_end", {
-        duration_seconds: durationSeconds,
-        ok: invokeOk,
-        heartbeat_count: m ? m.heartbeat.count : undefined,
-        compact_count_since_last: m ? m.compact.count_since_last : undefined,
-        estimated_context_tokens: m ? m.tokens.estimated_context_tokens : undefined,
-      });
+      runPostHeartbeat(
+        paths,
+        identity,
+        {
+          durationSeconds,
+          invokeOk,
+          tokens,
+          pendingSnapshot: decision.pendingSnapshot ?? {},
+          observeCompact: () => {
+            const sid = loadSessionId(paths);
+            return sid ? scanClaudeCompactLog(sid) : null;
+          },
+        },
+        log
+      );
       firstHeartbeat = false;
 
       if (hasAnyPending(paths)) {

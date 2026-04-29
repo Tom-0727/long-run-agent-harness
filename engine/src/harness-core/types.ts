@@ -39,6 +39,9 @@ export interface AgentIdentity {
 export interface AgentPaths {
   agentDir: string;
   runtimeDir: string;
+  heartbeatExtensionsDir: string;
+  heartbeatPreDir: string;
+  heartbeatPostDir: string;
   identityFile: string;
   pidFile: string;
   stateFile: string;
@@ -62,6 +65,11 @@ export interface AgentPaths {
   todoListDir: string;
   skillsDir: string;
   skillsTodoPreHeartbeat: string;
+}
+
+export interface PromptSection {
+  source: string;
+  content: string;
 }
 
 export interface WorkSchedule {
@@ -99,7 +107,7 @@ export interface ScheduledTask {
 export interface HeartbeatDecision {
   action: HeartbeatAction;
   reason?: "off_hours" | "awaiting" | "passive";
-  prompt?: string;
+  mailboxStatus?: string;
   pendingSnapshot?: Record<string, string>;
   sleepMinutes?: number;
   sleepSeconds?: number;

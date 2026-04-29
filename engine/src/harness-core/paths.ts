@@ -6,10 +6,14 @@ export function resolvePaths(agentDir: string): AgentPaths {
   const abs = path.resolve(agentDir);
   const runtimeDir = path.join(abs, "Runtime");
   const skillsDir = resolveSkillsDir(abs);
+  const heartbeatExtensionsDir = path.join(abs, ".harness", "heartbeat");
 
   return {
     agentDir: abs,
     runtimeDir,
+    heartbeatExtensionsDir,
+    heartbeatPreDir: path.join(heartbeatExtensionsDir, "pre"),
+    heartbeatPostDir: path.join(heartbeatExtensionsDir, "post"),
     identityFile: path.join(runtimeDir, "agent.json"),
     pidFile: path.join(runtimeDir, "pid"),
     stateFile: path.join(runtimeDir, "state"),
